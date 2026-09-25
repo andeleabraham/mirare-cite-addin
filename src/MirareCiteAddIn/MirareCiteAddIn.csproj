@@ -104,8 +104,12 @@
       <Private>True</Private>
     </Reference>
 
-    <!-- JSON for settings + the .mrrcite/.refmanager loaders -->
-    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <!-- JSON for settings + the .refmanager/.mrrcite loaders.
+         Newtonsoft, not System.Text.Json: STJ's .NET Framework dependency
+         chain (System.Runtime.CompilerServices.Unsafe binding redirects)
+         cannot be resolved inside a COM host like WINWORD — Newtonsoft is
+         a single dependency-free DLL that just works when Word loads us. -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
 
     <!--
       The Extensibility (IDTExtensibility2) interface ships with Visual
@@ -132,6 +136,7 @@
     <Compile Include="Models\CitedItem.cs" />
     <Compile Include="Services\ProjectLoader.cs" />
     <Compile Include="Services\RefManagerLoader.cs" />
+    <Compile Include="Services\ArticleMapper.cs" />
     <Compile Include="Services\RemoteCitationService.cs" />
     <Compile Include="Services\CitationFormatter.cs" />
     <Compile Include="Services\CitedTracker.cs" />

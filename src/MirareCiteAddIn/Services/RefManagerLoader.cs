@@ -1,24 +1,19 @@
 // ============================================================================
-//  RefManagerLoader.cs — loads a plain .refmanager.json (the primary
-//  library file).  Unlike .mrrcite (a ZIP), this is just JSON — read it
-//  straight off disk.
+//  RefManagerLoader.cs — loads the primary library file (refmanager.json)
+//  written by the Mirare desktop app:
 //
-//  See docs/data-formats.md for the schema.  The structure mirrors what
-//  the RefManagerLibrary model expects:
-//    {
-//      "libraryId": "...",
-//      "name": "My Library",
-//      "entries": [
-//        { "id": "...", "title": "...", "authors": [...], ... },
-//        ...
-//      ]
-//    }
+//      { "articles": [ {Crossref-style article}, ... ] }
+//
+//  Field mapping (defensive — types vary between fetch platforms) lives in
+//  ArticleMapper. Legacy/foreign shapes with an "entries" array are still
+//  tolerated.
 // ============================================================================
 
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Text;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using MirareCiteAddIn.Models;
 
 namespace MirareCiteAddIn.Services
@@ -32,34 +27,28 @@ namespace MirareCiteAddIn.Services
         public List<Citation> Load(string jsonPath)
         {
             if (!File.Exists(jsonPath))
-                throw new FileNotFoundException(".refmanager.json not found", jsonPath);
+                throw new FileNotFoundException("refmanager.json not found", jsonPath);
 
-            string json = File.ReadAllText(jsonPath, Encoding.UTF8);
-            var lib = System.Text.Json.JsonSerializer.Deserialize<RefManagerLibrary>(json);
+            string json = File.ReadAllText(jsonPath);
+            var root = JObject.Parse(json);
 
-            _log.Info($"Loaded library {lib.Name} ({lib.Entries?.Count ?? 0} entries)");
-
-            var citations = new List<Citation>();
-            if (lib.Entries == null) return citations;
-            foreach (var e in lib.Entries)
+            if (root.GetValue("articles", StringComparison.OrdinalIgnoreCase) is JArray articles)
             {
-                citations.Add(new Citation
-                {
-                    Id = e.Id,
-                    Title = e.Title,
-                    Authors = e.Authors,
-                    Year = e.Year,
-                    Journal = e.Journal,
-                    Doi = e.Doi,
-                    Url = e.Url,
-                    MiRNA = e.MiRNA,
-                    TargetGene = e.TargetGene,
-                    EvidenceType = e.EvidenceType,
-                    SourceDb = e.SourceDb,
-                    Origin = CitationOrigin.Library
-                });
+                var citations = ArticleMapper.FromArticles(articles, CitationOrigin.Library);
+                _log.Info($"Loaded library {Path.GetFileName(jsonPath)} ({citations.Count} articles)");
+                return citations;
             }
-            return citations;
+
+            // Legacy shape: { "entries": [ ... ] }
+            if (root.GetValue("entries", StringComparison.OrdinalIgnoreCase) is JArray entries)
+            {
+                var citations = ArticleMapper.FromArticles(entries, CitationOrigin.Library);
+                _log.Info($"Loaded legacy library ({citations.Count} entries)");
+                return citations;
+            }
+
+            throw new InvalidDataException(
+                "refmanager.json: no 'articles' array found — is this a Mirare library file?");
         }
     }
 }

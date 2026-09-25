@@ -24,7 +24,7 @@ using System;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Text;
-using System.Text.Json;
+using Newtonsoft.Json;
 using System.Threading.Tasks;
 using MirareCiteAddIn.Models;
 
@@ -69,7 +69,7 @@ namespace MirareCiteAddIn.Services
             resp.EnsureSuccessStatusCode();
             string body = await resp.Content.ReadAsStringAsync();
 
-            var payload = JsonSerializer.Deserialize<RemoteResponse>(body);
+            var payload = JsonConvert.DeserializeObject<RemoteResponse>(body);
             var citations = new List<Citation>();
             if (payload?.Results == null) return citations;
             foreach (var r in payload.Results)

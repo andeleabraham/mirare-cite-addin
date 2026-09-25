@@ -4,21 +4,18 @@
   ============================================================================
   Notes:
     - xmlns must be the 2009/07 customUI schema (Word 2010+).
-    - Every onAction / getLabel / getImage callback listed here MUST exist as a
-      public method on the Connect class — see Connect.cs.
+    - Every onAction / getLabel / onLoad callback listed here MUST exist as a
+      public method on the Connect class — see Connect.cs. Word invokes them
+      late-bound via IDispatch, so Connect must expose a class interface
+      ([ClassInterface(AutoDispatch)]) or clicks silently do nothing.
     - Office's ribbon engine is *case-sensitive* on callback names.
-    - If even one callback signature is wrong, Office silently drops the
-      whole tab.  To get diagnostics during development, set:
-        HKCU\Software\Microsoft\Office\16.0\Common\Debug\EnableRibbonExtensibilityLogging = 1
-      and check %TEMP%\RibbonXmlLog.txt.
+    - imageMso uses built-in Office icons (no image assets to ship).
 -->
 <customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui"
           onLoad="OnRibbonLoad">
 
   <ribbon>
     <tabs>
-      <!-- idQ = qualified id so multiple add-ins could share this tab;
-           plain id is fine for a single add-in. -->
       <tab id="mrcTab"
            label="Mirare Cite"
            keytip="MR">
@@ -31,6 +28,7 @@
           <button id="mrcInsertCitation"
                   label="Insert Citation"
                   size="large"
+                  imageMso="FieldInsert"
                   onAction="OnInsertCitation"
                   keytip="IC"
                   screentip="Insert a Mirare citation at the cursor"
@@ -39,21 +37,21 @@
           <!-- Three scoped shortcuts that pre-filter the picker. -->
           <button id="mrcInsertFromLibrary"
                   label="From Library"
-                  size="normal"
+                  imageMso="FileOpen"
                   onAction="OnInsertFromLibrary"
                   keytip="IL"
                   screentip="Insert from the primary RefManager library (.refmanager.json)" />
 
           <button id="mrcInsertFromProject"
                   label="From Project"
-                  size="normal"
+                  imageMso="FileOpen"
                   onAction="OnInsertFromProject"
                   keytip="IP"
                   screentip="Insert from a Mirare Cite project file (.mrrcite)" />
 
           <button id="mrcInsertFromRemote"
                   label="From Remote"
-                  size="normal"
+                  imageMso="FindDialog"
                   onAction="OnInsertFromRemote"
                   keytip="IR"
                   screentip="Insert from the remote Mirare API (HTTPS)" />
@@ -62,7 +60,7 @@
         <group id="mrcGroupStatus" label="Status">
           <button id="mrcRefreshCitedIndicator"
                   label="Refresh Cited Indicator"
-                  size="normal"
+                  imageMso="RefreshAll"
                   onAction="OnRefreshCitedIndicator"
                   keytip="RC"
                   screentip="Re-scan the active document and update the cited indicator on the picker list" />
@@ -75,7 +73,7 @@
         <group id="mrcGroupBibliography" label="Bibliography">
           <button id="mrcEditBibliography"
                   label="Update Bibliography"
-                  size="normal"
+                  imageMso="InsertBibliography"
                   onAction="OnEditBibliography"
                   keytip="UB"
                   screentip="Refresh the bibliography section at the end of the document from all cited items" />
@@ -84,7 +82,7 @@
         <group id="mrcGroupSettings" label="Settings">
           <button id="mrcSettings"
                   label="Settings"
-                  size="normal"
+                  imageMso="ComAddInsDialog"
                   onAction="OnSettings"
                   keytip="ST"
                   screentip="Default citation style, default source, remote endpoint URL" />

@@ -72,7 +72,7 @@ namespace MirareCiteAddIn.Services
                         if ((WdFieldType)fld.Type != WdFieldType.wdFieldAddin) continue;
 
                         string code = fld.Code.Text ?? "";
-                        if (!code.StartsWith("MRCITE ", StringComparison.Ordinal)) continue;
+                        if (!IsMirareFieldCode(code)) continue;
 
                         var parsed = ParseFieldCode(code);
                         if (parsed == null) continue;
@@ -90,10 +90,27 @@ namespace MirareCiteAddIn.Services
         }
 
         /// <summary>
+        /// Field.Code returns the instruction WITH its type keyword —
+        /// " ADDIN MRCITE id=abc123 style=apa " (leading/trailing space and
+        /// the ADDIN keyword included) — so normalize before matching.
+        /// </summary>
+        private static bool IsMirareFieldCode(string code)
+        {
+            if (string.IsNullOrEmpty(code)) return false;
+            code = code.Trim();
+            if (code.StartsWith("ADDIN ", StringComparison.OrdinalIgnoreCase))
+                code = code.Substring(6).TrimStart();
+            return code.StartsWith("MRCITE ", StringComparison.Ordinal);
+        }
+
+        /// <summary>
         /// Parse a field code like "MRCITE id=abc123 style=apa" into (id, style).
         /// </summary>
         private static CitedItem ParseFieldCode(string code)
         {
+            code = code.Trim();
+            if (code.StartsWith("ADDIN ", StringComparison.OrdinalIgnoreCase))
+                code = code.Substring(6).TrimStart();
             // Tokenize by whitespace.
             var tokens = code.Split(new[] { ' ', '\t', '\r', '\n' },
                 StringSplitOptions.RemoveEmptyEntries);

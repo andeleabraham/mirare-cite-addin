@@ -37,7 +37,11 @@ namespace MirareCiteAddIn
     [ComVisible(true)]
     [Guid("B3F5D2A8-7E1A-4C2B-9D3F-8A1B2C3D4E5F")]   // ← stable, do not regenerate
     [ProgId("MirareCite.AddIn")]
-    [ClassInterface(ClassInterfaceType.None)]         // ← generate explicit COM interface
+    // AutoDispatch (NOT None): Word's ribbon engine invokes onAction/onLoad
+    // callbacks late-bound through IDispatch. ClassInterfaceType.None
+    // exposes no IDispatch, so every button click silently fails — the
+    // ribbon renders but nothing happens.
+    [ClassInterface(ClassInterfaceType.AutoDispatch)]
     public class Connect : IDTExtensibility2, IRibbonExtensibility
     {
         // The ProgID is repeated here as a const so the installer .reg file
@@ -186,7 +190,15 @@ namespace MirareCiteAddIn
         /// </summary>
         public void OnRibbonLoad(IRibbonUI ribbon)
         {
-            try { _ribbonUi = ribbon; _log?.Info("OnRibbonLoad: IRibbonUI captured"); }
+            try
+            {
+                _ribbonUi = ribbon;
+                // RibbonCallbacks re-activates the tab after modal dialogs
+                // close — without this Word collapses the tab the moment a
+                // picker steals focus.
+                if (_callbacks != null) _callbacks.RibbonUi = ribbon;
+                _log?.Info("OnRibbonLoad: IRibbonUI captured");
+            }
             catch (Exception ex) { _log?.Error("OnRibbonLoad failed", ex); }
         }
         private IRibbonUI _ribbonUi;

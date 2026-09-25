@@ -44,9 +44,9 @@
       "frameworks": {
         "net48": {
           "dependencies": {
-            "System.Text.Json": {
+            "Newtonsoft.Json": {
               "target": "Package",
-              "version": "[8.0.5, )"
+              "version": "[13.0.3, )"
             }
           }
         }

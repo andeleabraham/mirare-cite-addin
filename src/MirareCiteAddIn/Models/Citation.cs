@@ -26,6 +26,7 @@ namespace MirareCiteAddIn.Models
         public string Journal { get; set; }
         public string Doi { get; set; }
         public string Url { get; set; }
+        public string Pages { get; set; }
 
         // miRNA-specific fields (ignored by general formatters but preserved
         // for round-tripping back to .mrrcite projects).

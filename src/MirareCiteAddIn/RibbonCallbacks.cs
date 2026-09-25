@@ -9,11 +9,13 @@
 // ============================================================================
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 using Microsoft.Office.Core;
 using Microsoft.Office.Interop.Word;
+using Newtonsoft.Json;
 // Alias for the qualified spellings below (Word.Application); the plain
 // using above stays so Document/Range/Field resolve unqualified.
 using Word = Microsoft.Office.Interop.Word;
@@ -29,6 +31,13 @@ namespace MirareCiteAddIn
         private readonly Logger _log;
         private readonly CitedTracker _tracker;
 
+        // Every citation picked this session, keyed by Id — Update
+        // Bibliography joins this against the document's cited ids.
+        // (MRCITE fields only store the id, so the full record has to come
+        // from somewhere; surviving Word restarts is a future improvement.)
+        private readonly Dictionary<string, Citation> _citationCache =
+            new Dictionary<string, Citation>();
+
         // Defaults — overridable via Settings dialog (stored in
         // %APPDATA%\MirareCite\settings.json).
         public CitationStyle Style { get; set; } = CitationStyle.Apa;
@@ -36,12 +45,27 @@ namespace MirareCiteAddIn
         public string LastLibraryPath { get; set; } = "";
         public string LastProjectPath { get; set; } = "";
 
+        /// <summary>Injected by Connect.OnRibbonLoad — lets us re-activate
+        /// the tab after a modal dialog collapses it.</summary>
+        public IRibbonUI RibbonUi { get; set; }
+
         public RibbonCallbacks(Word.Application word, Logger log)
         {
             _word = word;
             _log = log;
             _tracker = new CitedTracker(log);
             LoadSettings();
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        //  Word collapses a temporarily-expanded ribbon tab as soon as a
+        //  modal dialog steals focus, so after every dialog we re-activate
+        //  our tab — otherwise the user has to click the tab again.
+        // ─────────────────────────────────────────────────────────────────
+        private void RestoreRibbonTab()
+        {
+            try { RibbonUi?.ActivateTab("mrcTab"); }
+            catch (Exception ex) { _log.Warn("ActivateTab failed: " + ex.Message); }
         }
 
         // ─────────────────────────────────────────────────────────────────
@@ -87,11 +111,16 @@ namespace MirareCiteAddIn
                     {
                         InsertCitationAtSelection(doc, form.SelectedCitation, Style);
 
+                        // Remember the full record so Update Bibliography can
+                        // render it later (the field only stores the id).
+                        _citationCache[form.SelectedCitation.Id] = form.SelectedCitation;
+
                         // After insertion, update the tracker so the dynamic
                         // label on the ribbon reflects the new count.
                         _tracker.AddCited(form.SelectedCitation.Id);
                     }
                 }
+                RestoreRibbonTab();
             }
             catch (Exception ex)
             {
@@ -120,6 +149,7 @@ namespace MirareCiteAddIn
                 MessageBox.Show(
                     $"Refreshed. {_tracker.CitedIds.Count} item(s) currently cited in this document.",
                     "Mirare Cite", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                RestoreRibbonTab();
             }
             catch (Exception ex)
             {
@@ -134,18 +164,33 @@ namespace MirareCiteAddIn
                 Document doc = _word.ActiveDocument;
                 if (doc == null) return;
 
-                var formatter = new CitationFormatter(Style);
-                var bibText = formatter.BuildBibliography(
-                    _tracker.GetCitedCitations(doc));
+                // Join the document's cited ids (parsed from the MRCITE
+                // fields) against the session cache of full Citation records.
+                var cited = new List<Citation>();
+                foreach (var id in _tracker.CitedIds)
+                    if (_citationCache.TryGetValue(id, out var c))
+                        cited.Add(c);
 
-                // Find or create a "Bibliography" heading at the end of the doc.
+                if (cited.Count == 0)
+                {
+                    MessageBox.Show(
+                        "No cited items to list yet — insert at least one citation first.\n" +
+                        "(The bibliography is built from citations inserted in this Word session.)",
+                        "Mirare Cite", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                var formatter = new CitationFormatter(Style);
+                var bibText = formatter.BuildBibliography(cited);
+
+                // Append a References section at the end of the document.
                 Range tail = doc.Content;
                 tail.Collapse(WdCollapseDirection.wdCollapseEnd);
                 tail.InsertParagraphAfter();
                 tail = doc.Content;
                 tail.Collapse(WdCollapseDirection.wdCollapseEnd);
                 tail.InsertAfter("References\r" + bibText);
-                _log.Info("Bibliography updated");
+                _log.Info($"Bibliography updated with {cited.Count} entries");
             }
             catch (Exception ex)
             {
@@ -169,6 +214,7 @@ namespace MirareCiteAddIn
                     SaveSettings();
                 }
             }
+            RestoreRibbonTab();
         }
 
         // ─────────────────────────────────────────────────────────────────
@@ -210,11 +256,21 @@ namespace MirareCiteAddIn
             string inText = formatter.InText(c);
             string fieldCode = $"MRCITE id={c.Id} style={style}";
 
+            // Verified against a live Word instance: Fields.Add + ShowCodes(false)
+            // + Result.Text renders ONLY the citation text — the ADDIN code stays
+            // hidden. NOTE: Field.Result.Text always READS back empty for ADDIN
+            // fields (Word quirk); the text is nevertheless stored and displayed.
             Field fld = doc.Fields.Add(sel,
                 WdFieldType.wdFieldAddin,
                 fieldCode,
                 PreserveFormatting: false);
+            fld.ShowCodes = false;
             fld.Result.Text = inText;
+
+            // If field-codes view got toggled on (Alt+F9 or the Word option),
+            // every field renders as its raw "{ ADDIN ... }" code — force the
+            // window back to result view.
+            _word.ActiveWindow.View.ShowFieldCodes = false;
 
             _log.Info($"Inserted citation id={c.Id} style={style} text=\"{inText}\"");
         }
@@ -232,8 +288,8 @@ namespace MirareCiteAddIn
             try
             {
                 if (!File.Exists(SettingsPath)) return;
-                var s = System.Text.Json.JsonSerializer.Deserialize<SettingsDto>(
-                    File.ReadAllText(SettingsPath));
+                var s = JsonConvert.DeserializeObject<SettingsDto>(File.ReadAllText(SettingsPath));
+                if (s == null) return;
                 Style = s.Style;
                 RemoteEndpoint = s.RemoteEndpoint;
                 LastLibraryPath = s.LastLibraryPath;
@@ -254,8 +310,7 @@ namespace MirareCiteAddIn
                     LastLibraryPath = LastLibraryPath,
                     LastProjectPath = LastProjectPath
                 };
-                File.WriteAllText(SettingsPath,
-                    System.Text.Json.JsonSerializer.Serialize(dto, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+                File.WriteAllText(SettingsPath, JsonConvert.SerializeObject(dto, Formatting.Indented));
             }
             catch (Exception ex) { _log.Warn("SaveSettings failed: " + ex.Message); }
         }
