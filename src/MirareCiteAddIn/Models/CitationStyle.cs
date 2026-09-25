@@ -21,6 +21,7 @@ namespace MirareCiteAddIn.Models
         Apa,
         Mla,
         Chicago,
-        Numeric
+        Numeric,
+        Csl        // rendered from a .csl file (same files the Mirare app uses)
     }
 }

@@ -103,9 +103,17 @@ namespace MirareCiteAddIn.Services
         {
             if (string.IsNullOrEmpty(code)) return "";
             code = code.Trim();
+            // DOCVARIABLE fields: DOCVARIABLE  "MRCITE id=… style=…"
+            if (code.StartsWith("DOCVARIABLE", StringComparison.OrdinalIgnoreCase))
+            {
+                int q1 = code.IndexOf('"');
+                int q2 = code.LastIndexOf('"');
+                code = (q1 >= 0 && q2 > q1) ? code.Substring(q1 + 1, q2 - q1 - 1) : code.Substring(11);
+            }
+            // Legacy ADDIN fields: ADDIN MRCITE …
             if (code.StartsWith("ADDIN ", StringComparison.OrdinalIgnoreCase))
                 code = code.Substring(6).TrimStart();
-            return code;
+            return code.Trim();
         }
 
         /// <summary>True if the field is an MRCITE citation (not the

@@ -22,8 +22,10 @@ namespace MirareCiteAddIn.Forms
         private TextBox _remoteBox;
         private TextBox _libraryBox;
         private TextBox _projectBox;
+        private TextBox _cslBox;
         private Button _btnBrowseLibrary;
         private Button _btnBrowseProject;
+        private Button _btnBrowseCsl;
         private Button _btnOk;
         private Button _btnCancel;
 
@@ -31,22 +33,25 @@ namespace MirareCiteAddIn.Forms
         public string RemoteEndpoint { get; private set; }
         public string LibraryPath { get; private set; }
         public string ProjectPath { get; private set; }
+        public string CslStylePath { get; private set; }
 
-        public SettingsForm(CitationStyle style, string remote, string library, string project, Logger log)
+        public SettingsForm(CitationStyle style, string remote, string library, string project,
+                            string cslStylePath, Logger log)
         {
             _log = log;
             Style = style;
             RemoteEndpoint = remote;
             LibraryPath = library;
             ProjectPath = project;
+            CslStylePath = cslStylePath ?? "";
             Build();
         }
 
         private void Build()
         {
             Text = "Mirare Cite — Settings";
-            Width = 520;
-            Height = 320;
+            Width = 540;
+            Height = 380;
             StartPosition = FormStartPosition.CenterScreen;
             Font = new Font("Segoe UI", 9F);
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -58,7 +63,7 @@ namespace MirareCiteAddIn.Forms
                 Dock = DockStyle.Fill,
                 Padding = new Padding(16),
                 ColumnCount = 3,
-                RowCount = 5,
+                RowCount = 6,
                 AutoSize = false,
             };
             t.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
@@ -74,7 +79,8 @@ namespace MirareCiteAddIn.Forms
                 Anchor = AnchorStyles.Left | AnchorStyles.Right,
             };
             _styleCombo.Items.AddRange(new object[] {
-                CitationStyle.Apa, CitationStyle.Mla, CitationStyle.Chicago, CitationStyle.Numeric
+                CitationStyle.Apa, CitationStyle.Mla, CitationStyle.Chicago,
+                CitationStyle.Numeric, CitationStyle.Csl
             });
             _styleCombo.SelectedItem = Style;
             t.Controls.Add(_styleCombo, 1, 0);
@@ -104,6 +110,35 @@ namespace MirareCiteAddIn.Forms
                 "Mirare Cite project (*.mrrcite)|*.mrrcite");
             t.Controls.Add(_btnBrowseProject, 2, 3);
 
+            // CSL style file (used when Citation style = Csl). The browse
+            // dialog opens in the Mirare app's styles folder when it can be
+            // discovered from %APPDATA%\MirareCite\user_settings.json.
+            t.Controls.Add(new Label
+            {
+                Text = "CSL style file:",
+                AutoSize = true,
+                Anchor = AnchorStyles.Left,
+                Enabled = Style == CitationStyle.Csl
+            }, 0, 4);
+            _cslBox = new TextBox { Text = CslStylePath, Dock = DockStyle.Top, ReadOnly = true };
+            t.Controls.Add(_cslBox, 1, 4);
+            _btnBrowseCsl = new Button { Text = "Browse…", Dock = DockStyle.Top };
+            _btnBrowseCsl.Click += (s, e) =>
+            {
+                BrowseFile(_cslBox, "CSL style (*.csl)|*.csl");
+                if (!string.IsNullOrEmpty(_cslBox.Text))
+                    _styleCombo.SelectedItem = CitationStyle.Csl;   // picking a file implies CSL
+            };
+            t.Controls.Add(_btnBrowseCsl, 2, 4);
+            _styleCombo.SelectedIndexChanged += (s, e) =>
+            {
+                bool csl = (CitationStyle)_styleCombo.SelectedItem == CitationStyle.Csl;
+                _cslBox.Enabled = csl;
+                _btnBrowseCsl.Enabled = csl;
+            };
+            _cslBox.Enabled = Style == CitationStyle.Csl;
+            _btnBrowseCsl.Enabled = Style == CitationStyle.Csl;
+
             // Buttons row
             var btnBar = new FlowLayoutPanel
             {
@@ -127,8 +162,34 @@ namespace MirareCiteAddIn.Forms
         private void BrowseFile(TextBox box, string filter)
         {
             using (var ofd = new OpenFileDialog { Filter = filter, CheckFileExists = true })
+            {
+                string dir = DiscoverStylesFolder();
+                if (dir != null && Directory.Exists(dir)) ofd.InitialDirectory = dir;
                 if (ofd.ShowDialog() == DialogResult.OK)
                     box.Text = ofd.FileName;
+            }
+        }
+
+        /// <summary>The Mirare app's styles folder, discovered from the app's
+        /// own settings (%APPDATA%\MirareCite\user_settings.json →
+        /// working_directory + "\styles"). Null if not discoverable.</summary>
+        private static string DiscoverStylesFolder()
+        {
+            try
+            {
+                string appSettings = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "MirareCite", "user_settings.json");
+                if (!File.Exists(appSettings)) return null;
+                var json = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(appSettings));
+                string wd = (string)json["working_directory"];
+                if (string.IsNullOrEmpty(wd)) return null;
+                return Path.Combine(wd, "styles");
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private void Commit()
@@ -137,6 +198,13 @@ namespace MirareCiteAddIn.Forms
             RemoteEndpoint = _remoteBox.Text.Trim();
             LibraryPath = _libraryBox.Text.Trim();
             ProjectPath = _projectBox.Text.Trim();
+            CslStylePath = _cslBox.Text.Trim();
+            if (Style == CitationStyle.Csl && !File.Exists(CslStylePath))
+            {
+                MessageBox.Show("Citation style is set to Csl — pick a .csl style file first.",
+                    "Mirare Cite", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;     // keep the dialog open
+            }
             DialogResult = DialogResult.OK;
         }
     }

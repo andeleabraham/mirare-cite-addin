@@ -18,24 +18,50 @@ namespace MirareCiteAddIn.Services
     public class CitationFormatter
     {
         private readonly CitationStyle _style;
+        private readonly CslStyle _csl;     // non-null when a .csl file drives formatting
 
         public CitationFormatter(CitationStyle style) { _style = style; }
+
+        /// <summary>Renders from a .csl file (the same styles the Mirare
+        /// app uses). Falls back to APA-like output if the file can't load.</summary>
+        public CitationFormatter(string cslPath)
+        {
+            _style = CitationStyle.Csl;
+            try { _csl = CslStyle.Load(cslPath); }
+            catch { _csl = null; }          // caller-supplied path — never throw
+        }
+
+        /// <summary>Delimiter between multiple citations in one field
+        /// (author-date styles use "; ", CSL styles declare their own).</summary>
+        public string MultiCitationDelimiter => _csl?.CitationDelimiter ?? "; ";
 
         // ─────────────────────────────────────────────────────────────────
         //  In-text citation — e.g. "(Smith et al., 2022)".
         // ─────────────────────────────────────────────────────────────────
         public string InText(Citation c)
-            => _style == CitationStyle.Numeric
-                ? InTextCore(c)              // "[mirare:…]" carries its own brackets
+            // CSL layouts carry their own parens/brackets (layout prefix and
+            // suffix), and numeric placeholders are self-bracketed — only the
+            // built-in author-date styles get parentheses added here.
+            => _style == CitationStyle.Numeric || _csl != null
+                ? InTextCore(c)
                 : $"({InTextCore(c)})";
 
         /// <summary>
-        /// The citation text WITHOUT surrounding parentheses — the parens are
-        /// inserted as plain document text around the field, so users can
-        /// style/edit them independently (Zotero-style).
+        /// The citation text WITHOUT surrounding parentheses. For CSL styles
+        /// the layout itself decides whether brackets are part of the text.
         /// </summary>
         public string InTextCore(Citation c)
         {
+            if (_csl != null)
+            {
+                // Numeric CSL styles (IEEE, Vancouver) cite by reference
+                // number, which we only know after a bibliography pass —
+                // render the same placeholder the built-in Numeric style uses.
+                if (_csl.IsNumeric) return $"[mirare:{c.Id}]";
+                string rendered = _csl.RenderInText(c);
+                return string.IsNullOrEmpty(rendered) ? FallbackCore(c) : rendered;
+            }
+
             switch (_style)
             {
                 case CitationStyle.Apa:
@@ -58,6 +84,15 @@ namespace MirareCiteAddIn.Services
             }
         }
 
+        /// <summary>Used when a CSL layout renders nothing usable.</summary>
+        private static string FallbackCore(Citation c)
+        {
+            string auth = c.Authors == null || c.Authors.Count == 0 ? "Anonymous"
+                        : c.Authors.Count == 1 ? SurnameOf(c.Authors[0])
+                        : SurnameOf(c.Authors[0]) + " et al.";
+            return $"{auth}, {c.Year?.ToString() ?? "n.d."}";
+        }
+
         // ─────────────────────────────────────────────────────────────────
         //  Full bibliography entry, one per line.
         // ─────────────────────────────────────────────────────────────────
@@ -67,9 +102,13 @@ namespace MirareCiteAddIn.Services
             int n = 1;
             foreach (var c in cited ?? Enumerable.Empty<Citation>())
             {
-                string entry = _style == CitationStyle.Numeric
-                    ? $"[{n}]  {BibEntry(c)}"
-                    : BibEntry(c);
+                string entry;
+                if (_csl != null)
+                    entry = _csl.RenderBibliographyEntry(c, n);
+                else if (_style == CitationStyle.Numeric)
+                    entry = $"[{n}]  {BibEntry(c)}";
+                else
+                    entry = BibEntry(c);
                 sb.AppendLine(entry);
                 n++;
             }

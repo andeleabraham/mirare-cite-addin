@@ -45,6 +45,35 @@ namespace MirareCiteAddIn
         public string LastLibraryPath { get; set; } = "";
         public string LastProjectPath { get; set; } = "";
 
+        /// <summary>.csl file used when Style == Csl — same style files the
+        /// Mirare desktop app keeps in its styles folder.</summary>
+        public string CslStylePath { get; set; } = "";
+
+        /// <summary>The active formatter: CSL-file driven when a style file
+        /// is configured, otherwise one of the built-in styles.</summary>
+        private CitationFormatter CreateFormatter()
+            => Style == CitationStyle.Csl && !string.IsNullOrEmpty(CslStylePath)
+                ? new CitationFormatter(CslStylePath)
+                : new CitationFormatter(Style);
+
+        /// <summary>Full display text for a citation field: the joined
+        /// in-text citations, wrapped in parentheses for the built-in
+        /// author-date styles. CSL layouts carry their own brackets/parens
+        /// (from the style's layout prefix/suffix), numeric styles use
+        /// [brackets] — so no extra wrapping there. The whole text lives
+        /// INSIDE the field, Zotero/Mendeley-style, so Word treats the
+        /// entire "(Author, Year)" as one field.</summary>
+        private string RenderCitationDisplay(IList<Citation> citations, CitationStyle style,
+                                             CitationFormatter formatter)
+        {
+            string core = string.Join(formatter.MultiCitationDelimiter,
+                citations.Select(c => formatter.InTextCore(c)));
+            bool wrap = style == CitationStyle.Apa
+                     || style == CitationStyle.Mla
+                     || style == CitationStyle.Chicago;
+            return wrap ? "(" + core + ")" : core;
+        }
+
         /// <summary>Injected by Connect.OnRibbonLoad — lets us re-activate
         /// the tab after a modal dialog collapses it.</summary>
         public IRibbonUI RibbonUi { get; set; }
@@ -95,7 +124,10 @@ namespace MirareCiteAddIn
         public string GetInsertButtonLabel()
             => FindMirareCitationFieldAtSelection() != null ? "Edit Citation" : "Insert Citation";
 
-        /// <summary>The MRCITE citation field containing the cursor, if any.</summary>
+        /// <summary>The MRCITE citation field containing the cursor, if any.
+        /// The zone spans the surrounding plain-text parentheses too — from
+        /// the opening "(" to the closing ")" — so the button reads
+        /// "Edit Citation" anywhere inside the whole citation.</summary>
         private Field FindMirareCitationFieldAtSelection()
         {
             try
@@ -106,11 +138,11 @@ namespace MirareCiteAddIn
                 foreach (Field f in doc.Fields)
                 {
                     if (!CitedTracker.IsMirareCitationCode(f.Code.Text)) continue;
-                    // Field span: one char before the code (field-begin) up to
-                    // the end of the result (field-end). Use a small margin so
-                    // a cursor right at either edge counts as "inside".
-                    if (sel.Start >= f.Code.Start - 1 && sel.Start <= f.Result.End + 1 &&
-                        sel.End <= f.Result.End + 1)
+                    // Field chars sit one position out from the code range;
+                    // the parens are one further (field span:
+                    // "(" at Code.Start-2 … ")" at Result.End+1).
+                    if (sel.Start >= f.Code.Start - 2 && sel.Start <= f.Result.End + 2 &&
+                        sel.End <= f.Result.End + 2)
                         return f;
                 }
             }
@@ -138,8 +170,24 @@ namespace MirareCiteAddIn
                 var citedIds = _tracker.ScanDocument(doc);
                 _log.Info($"OpenPicker: scope={scope} edit={fieldToEdit != null} cited={citedIds.Count}");
 
+                // Editing: the dialog's preview starts with the field's
+                // current citations (from the session cache; anything missing
+                // is matched against the picker's loaded data by id).
+                IEnumerable<Citation> preloaded = null;
+                HashSet<string> preselectedIds = null;
+                if (fieldToEdit != null)
+                {
+                    preselectedIds = new HashSet<string>(
+                        CitedTracker.ParseFieldIds(fieldToEdit.Code.Text));
+                    preloaded = preselectedIds
+                        .Select(id => _citationCache.TryGetValue(id, out var c) ? c : null)
+                        .Where(c => c != null)
+                        .ToList();
+                }
+
                 using (var form = new CitationPickerForm(scope, Style, RemoteEndpoint,
-                            LastLibraryPath, LastProjectPath, citedIds, _log))
+                            LastLibraryPath, LastProjectPath, citedIds, _log,
+                            preloaded, preselectedIds))
                 {
                     if (form.ShowDialog() == DialogResult.OK && form.SelectedCitation != null)
                     {
@@ -219,19 +267,17 @@ namespace MirareCiteAddIn
                     return;
                 }
 
-                var formatter = new CitationFormatter(Style);
+                var formatter = CreateFormatter();
                 var bibText = formatter.BuildBibliography(cited).Replace("\r\n", "\r");
 
-                // Zotero-style: the bibliography lives in ONE field that is
-                // updated in place on every click — never appended twice.
-                // Repeated Result.Text writes corrupt ADDIN fields, so the
-                // field is deleted and recreated at the same position.
+                // Zotero-style: the bibliography lives in ONE DOCVARIABLE
+                // field that is updated in place on every click — Word owns
+                // the result section, so updates never corrupt the field.
+                string bibVar = $"MRCITE BIBLIOGRAPHY style={Style}";
                 Field bibField = FindBibliographyField(doc);
                 if (bibField != null)
                 {
-                    int at = bibField.Code.Start - 1;
-                    bibField.Delete();
-                    CreateBibliographyField(doc, doc.Range(at, at), bibText);
+                    SetDocVariable(doc, bibField, bibText);
                     _log.Info($"Bibliography field updated with {cited.Count} entries");
                 }
                 else
@@ -244,7 +290,7 @@ namespace MirareCiteAddIn
                     tail.Collapse(WdCollapseDirection.wdCollapseEnd);
                     tail.InsertAfter("References\r");
                     Range atEnd = doc.Range(doc.Content.End - 1, doc.Content.End - 1);
-                    CreateBibliographyField(doc, atEnd, bibText);
+                    InsertDocVariableField(doc, atEnd, bibVar, bibText);
                     _log.Info($"Bibliography field created with {cited.Count} entries");
                 }
                 _word.ActiveWindow.View.ShowFieldCodes = false;
@@ -261,7 +307,6 @@ namespace MirareCiteAddIn
         {
             foreach (Field f in doc.Fields)
             {
-                if (f.Type != WdFieldType.wdFieldAddin) continue;
                 string code = CitedTracker.NormalizeFieldCode(f.Code.Text);
                 if (code.StartsWith("MRCITE BIBLIOGRAPHY", StringComparison.OrdinalIgnoreCase))
                     return f;
@@ -269,18 +314,50 @@ namespace MirareCiteAddIn
             return null;
         }
 
-        private void CreateBibliographyField(Document doc, Range at, string bibText)
+        // ─────────────────────────────────────────────────────────────────
+        //  DOCVARIABLE field machinery — the reliable way to keep display
+        //  text INSIDE a field. Lab-verified: ADDIN fields created via
+        //  Fields.Add have NO result section and Word's Result range points
+        //  PAST the field end, so Result.Text writes land OUTSIDE the field
+        //  (plain text next to it) — the "broken structure". DOCVARIABLE
+        //  fields have real results that Word itself maintains via Update().
+        // ─────────────────────────────────────────────────────────────────
+        private void SetDocVariable(Document doc, Field field, string value)
         {
-            Field fld = doc.Fields.Add(at, WdFieldType.wdFieldAddin,
-                $"MRCITE BIBLIOGRAPHY style={Style}", PreserveFormatting: false);
+            string varName = CitedTracker.NormalizeFieldCode(field.Code.Text);
+            Variable v = FindVariable(doc, varName);
+            if (v != null) v.Value = value;
+            field.Update();
+        }
+
+        private Variable FindVariable(Document doc, string name)
+        {
+            foreach (Variable v in doc.Variables)
+                if (string.Equals(v.Name, name, StringComparison.Ordinal))
+                    return v;
+            return null;
+        }
+
+        private void InsertDocVariableField(Document doc, Range at, string varName, string value)
+        {
+            Variable v = FindVariable(doc, varName);
+            if (v == null)
+                doc.Variables.Add(varName, value);
+            else
+                v.Value = value;
+
+            // NOTE: Fields.Add prepends the field keyword itself — pass only
+            // the quoted variable name or the code doubles ("DOCVARIABLE DOCVARIABLE").
+            Field fld = doc.Fields.Add(at, WdFieldType.wdFieldDocVariable,
+                $"\"{varName}\"", PreserveFormatting: false);
             fld.ShowCodes = false;
-            fld.Result.Text = bibText;
+            fld.Update();
         }
 
         public void OnSettings(IRibbonControl control)
         {
             using (var f = new SettingsForm(Style, RemoteEndpoint,
-                       LastLibraryPath, LastProjectPath, _log))
+                       LastLibraryPath, LastProjectPath, CslStylePath, _log))
             {
                 if (f.ShowDialog() == DialogResult.OK)
                 {
@@ -288,6 +365,7 @@ namespace MirareCiteAddIn
                     RemoteEndpoint = f.RemoteEndpoint;
                     LastLibraryPath = f.LibraryPath;
                     LastProjectPath = f.ProjectPath;
+                    CslStylePath = f.CslStylePath;
                     SaveSettings();
                 }
             }
@@ -325,10 +403,13 @@ namespace MirareCiteAddIn
         //  exactly like Zotero/Mendeley multi-citations.
         //
         //  Lab-verified Word behavior this code relies on:
-        //   * Fields.Add + ShowCodes(false) + Result.Text renders only the
-        //     result — but Result.Text always READS back empty for ADDIN
-        //     fields, and writing it a SECOND time corrupts (prepends), so
-        //     updates must delete + recreate the field (see Replace…).
+        //   * ADDIN fields created via Fields.Add have NO result section and
+        //     Word's Result range points PAST the field end — Result.Text
+        //     writes land OUTSIDE the field as plain text ("broken structure").
+        //   * DOCVARIABLE fields have REAL result sections that Word itself
+        //     maintains: Variables[name].Value = text; field.Update() renders
+        //     the text inside the field, survives ShowCodes, copies cleanly,
+        //     and updates in place. So that's what we use.
         // ─────────────────────────────────────────────────────────────────
         private static string BuildMirareFieldCode(IList<Citation> citations, CitationStyle style)
             => "MRCITE" + string.Join("", citations.Select(c => " id=" + c.Id)) + " style=" + style;
@@ -336,58 +417,94 @@ namespace MirareCiteAddIn
         private void InsertCitationsAtSelection(Document doc, IList<Citation> citations, CitationStyle style)
         {
             Range sel = _word.Selection.Range;
-            var formatter = new CitationFormatter(style);
-            string core = string.Join("; ", citations.Select(c => formatter.InTextCore(c)));
-            string fieldCode = BuildMirareFieldCode(citations, style);
-            bool wrapParens = style != CitationStyle.Numeric;   // "[1]" brackets its own
+            var formatter = CreateFormatter();
+            string display = RenderCitationDisplay(citations, style, formatter);
+            string varName = BuildMirareFieldCode(citations, style);
 
-            if (wrapParens)
-            {
-                // Plain-text parens first, then the field goes between them.
-                Range r = sel;
-                r.Text = "()";
-                Range inner = doc.Range(r.Start + 1, r.Start + 1);
-                Field fld = doc.Fields.Add(inner, WdFieldType.wdFieldAddin,
-                    fieldCode, PreserveFormatting: false);
-                fld.ShowCodes = false;
-                fld.Result.Text = core;
-            }
-            else
-            {
-                Field fld = doc.Fields.Add(sel, WdFieldType.wdFieldAddin,
-                    fieldCode, PreserveFormatting: false);
-                fld.ShowCodes = false;
-                fld.Result.Text = core;
-            }
+            // The whole "(Author, Year)" — parens included — lives INSIDE the
+            // field, Zotero/Mendeley-style, so Word itself treats the full
+            // segment as one field and cursor detection is native.
+            InsertDocVariableField(doc, sel, varName, display);
 
             // If field-codes view got toggled on (Alt+F9 or the Word option),
-            // every field renders as its raw "{ ADDIN ... }" code — force the
-            // window back to result view.
+            // every field renders as its raw code — force result view.
             _word.ActiveWindow.View.ShowFieldCodes = false;
 
-            _log.Info($"Inserted {citations.Count} citation(s) text=\"{core}\"");
+            _log.Info($"Inserted {citations.Count} citation(s) text=\"{display}\"");
         }
 
         /// <summary>
-        /// Edit mode: swap the citations in an existing field. Repeated
-        /// Result.Text writes corrupt ADDIN fields, so the field is deleted
-        /// and recreated at the same position (the plain-text parens around
-        /// it survive untouched).
+        /// Edit mode: swap the citations in an existing field. The field's
+        /// document variable carries the new value and Word re-renders the
+        /// result in place — no deletion needed, so nothing is left behind.
+        /// If the citation ids changed, the field is rebuilt (the variable
+        /// name encodes them); the old variable is removed if now orphaned.
         /// </summary>
         private void ReplaceCitationField(Document doc, Field oldField, IList<Citation> citations)
         {
-            int at = oldField.Code.Start - 1;           // the field-begin char
-            oldField.Delete();
-            Range r = doc.Range(at, at);
+            string oldVarName = CitedTracker.NormalizeFieldCode(oldField.Code.Text);
+            bool wasDocVariable = oldField.Type == WdFieldType.wdFieldDocVariable;
 
-            var formatter = new CitationFormatter(Style);
-            string core = string.Join("; ", citations.Select(c => formatter.InTextCore(c)));
-            Field fld = doc.Fields.Add(r, WdFieldType.wdFieldAddin,
-                BuildMirareFieldCode(citations, Style), PreserveFormatting: false);
-            fld.ShowCodes = false;
-            fld.Result.Text = core;
+            var formatter = CreateFormatter();
+            string display = RenderCitationDisplay(citations, Style, formatter);
+            string varName = BuildMirareFieldCode(citations, Style);
+
+            if (wasDocVariable && string.Equals(oldVarName, varName, StringComparison.Ordinal))
+            {
+                SetDocVariable(doc, oldField, display);
+            }
+            else
+            {
+                // Ids (or field kind) changed — rebuild the field in place.
+                // Legacy ADDIN fields have unreliable Result ranges, so find
+                // the true field-end character by scanning for chr(21).
+                bool legacyAddin = oldField.Type == WdFieldType.wdFieldAddin;
+                int start = oldField.Code.Start - 1;
+                int end = legacyAddin
+                    ? FindFieldTrueEnd(doc, oldField.Code.End) + 1
+                    : oldField.Result.End + 1;
+                doc.Range(start, end).Delete();
+                InsertDocVariableField(doc, doc.Range(start, start), varName, display);
+
+                // Remove the old variable if no other field still uses it.
+                if (!string.Equals(oldVarName, varName, StringComparison.Ordinal)
+                    && !VariableStillReferenced(doc, oldVarName))
+                {
+                    Variable v = FindVariable(doc, oldVarName);
+                    v?.Delete();
+                }
+            }
             _word.ActiveWindow.View.ShowFieldCodes = false;
-            _log.Info($"Replaced citation field with {citations.Count} citation(s) text=\"{core}\"");
+            _log.Info($"Replaced citation field with {citations.Count} citation(s) text=\"{display}\"");
+        }
+
+        /// <summary>True end of an ADDIN field = position of its field-end
+        /// character. ADDIN Result ranges are unreliable, so scan for chr21.</summary>
+        private static int FindFieldTrueEnd(Document doc, int fromPos)
+        {
+            try
+            {
+                int last = Math.Min(fromPos + 1000, doc.Content.End - 1);
+                Range probe = doc.Range(fromPos, fromPos + 1);
+                for (int pos = fromPos; pos < last; pos++)
+                {
+                    if (probe.Text == "\u0015") return pos;
+                    probe = doc.Range(pos + 1, pos + 2);
+                }
+            }
+            catch { }
+            return fromPos;
+        }
+
+        private bool VariableStillReferenced(Document doc, string varName)
+        {
+            foreach (Field f in doc.Fields)
+            {
+                if (string.Equals(CitedTracker.NormalizeFieldCode(f.Code.Text), varName,
+                                  StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
         }
 
         // ─────────────────────────────────────────────────────────────────
@@ -409,6 +526,7 @@ namespace MirareCiteAddIn
                 RemoteEndpoint = s.RemoteEndpoint;
                 LastLibraryPath = s.LastLibraryPath;
                 LastProjectPath = s.LastProjectPath;
+                CslStylePath = s.CslStylePath ?? "";
             }
             catch (Exception ex) { _log.Warn("LoadSettings failed: " + ex.Message); }
         }
@@ -423,7 +541,8 @@ namespace MirareCiteAddIn
                     Style = Style,
                     RemoteEndpoint = RemoteEndpoint,
                     LastLibraryPath = LastLibraryPath,
-                    LastProjectPath = LastProjectPath
+                    LastProjectPath = LastProjectPath,
+                    CslStylePath = CslStylePath
                 };
                 File.WriteAllText(SettingsPath, JsonConvert.SerializeObject(dto, Formatting.Indented));
             }
@@ -436,6 +555,7 @@ namespace MirareCiteAddIn
             public string RemoteEndpoint { get; set; }
             public string LastLibraryPath { get; set; }
             public string LastProjectPath { get; set; }
+            public string CslStylePath { get; set; }
         }
     }
 }

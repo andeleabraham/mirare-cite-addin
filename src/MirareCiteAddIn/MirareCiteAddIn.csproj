@@ -139,6 +139,7 @@
     <Compile Include="Services\ArticleMapper.cs" />
     <Compile Include="Services\RemoteCitationService.cs" />
     <Compile Include="Services\CitationFormatter.cs" />
+    <Compile Include="Services\CslStyle.cs" />
     <Compile Include="Services\CitedTracker.cs" />
     <Compile Include="Services\Logger.cs" />
     <Compile Include="Forms\CitationPickerForm.cs">

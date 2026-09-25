@@ -48,16 +48,24 @@ namespace MirareCiteAddIn.Forms
         private Button _btnInsert;
         private Button _btnCancel;
         private Label _lblSource;
+        private ListBox _previewList;
+
+        // Citations queued for the reference (add → preview → Insert).
+        // When editing an existing field it starts pre-loaded with what the
+        // field already contains, so the user can add or remove freely.
+        private readonly List<Citation> _previewItems = new List<Citation>();
 
         public Citation SelectedCitation { get; private set; }
 
-        /// <summary>All picked citations (Ctrl/Shift multi-select) — inserted
-        /// into ONE citation field, Zotero-style. Single pick = list of 1.</summary>
+        /// <summary>All queued citations — inserted into ONE citation field,
+        /// Zotero-style. Single pick = list of 1.</summary>
         public List<Citation> SelectedCitations { get; private set; }
 
         public CitationPickerForm(CitationSourceScope scope, CitationStyle style,
             string remoteEndpoint, string lastLibraryPath, string lastProjectPath,
-            HashSet<string> citedIds, Logger log)
+            HashSet<string> citedIds, Logger log,
+            IEnumerable<Citation> preloadedCitations = null,
+            HashSet<string> preselectedIds = null)
         {
             _scope = scope;
             _style = style;
@@ -66,8 +74,24 @@ namespace MirareCiteAddIn.Forms
             _lastProjectPath = lastProjectPath;
             _citedIds = citedIds ?? new HashSet<string>();
             _log = log;
+            if (preloadedCitations != null)
+                _previewItems.AddRange(preloadedCitations);
             InitializeComponent();
             LoadInitialData();
+
+            // Editing: pull any remaining preselected ids out of the loaded
+            // data (covers records not in the session cache, e.g. after a
+            // Word restart).
+            if (preselectedIds != null)
+            {
+                foreach (var id in preselectedIds)
+                {
+                    if (_previewItems.Any(p => p.Id == id)) continue;
+                    var match = _all.FirstOrDefault(a => a.Id == id);
+                    if (match != null) _previewItems.Add(match);
+                }
+            }
+            RefreshPreview();
         }
 
         private void InitializeComponent()
@@ -161,13 +185,52 @@ namespace MirareCiteAddIn.Forms
             _list.Columns.Add("Origin", 70);
             _list.Columns.Add("Year", 60);
             _list.Columns.Add("Title / Authors / miRNA", 540);
-            _list.DoubleClick += (s, e) => OnInsert();
+            _list.DoubleClick += (s, e) => AddSelectedToPreview();
             _list.SelectedIndexChanged += (s, e) =>
-                _btnInsert.Enabled = _list.SelectedItems.Count > 0;
+                _btnInsert.Enabled = _list.SelectedItems.Count > 0 || _previewItems.Count > 0;
 
             Controls.Add(_list);
             Controls.Add(toolbar);    // re-add at top z-order
             Controls.Add(srcBar);
+
+            // ── Preview / add-remove area (Zotero-style editing) ─────────
+            // Sits above the button bar: add articles here, see the queue,
+            // remove what you don't want, then hit Insert.
+            var previewPanel = new Panel { Dock = DockStyle.Bottom, Height = 118 };
+            var lblPreview = new Label
+            {
+                Text = "Citations in this reference:",
+                AutoSize = true,
+                Location = new Point(8, 6)
+            };
+            _previewList = new ListBox
+            {
+                Location = new Point(8, 26),
+                Size = new Size(600, 84),
+                Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
+                Font = new Font("Segoe UI", 9F),
+            };
+            var btnAdd = new Button
+            {
+                Text = "Add →",
+                Size = new Size(90, 26),
+                Location = new Point(616, 26),
+                Anchor = AnchorStyles.Top | AnchorStyles.Right
+            };
+            btnAdd.Click += (s, e) => AddSelectedToPreview();
+            var btnRemove = new Button
+            {
+                Text = "← Remove",
+                Size = new Size(90, 26),
+                Location = new Point(616, 56),
+                Anchor = AnchorStyles.Top | AnchorStyles.Right
+            };
+            btnRemove.Click += (s, e) => RemoveSelectedFromPreview();
+            previewPanel.Controls.Add(lblPreview);
+            previewPanel.Controls.Add(_previewList);
+            previewPanel.Controls.Add(btnAdd);
+            previewPanel.Controls.Add(btnRemove);
+            Controls.Add(previewPanel);   // added BEFORE btnBar → sits above it
 
             // ── Bottom button bar ────────────────────────────────────────
             var btnBar = new Panel { Dock = DockStyle.Bottom, Height = 44 };
@@ -375,20 +438,56 @@ namespace MirareCiteAddIn.Forms
              : o == CitationOrigin.Project ? "project" : "library";
 
         // ─────────────────────────────────────────────────────────────────
-        //  Insert button — collects ALL selected citations (Ctrl/Shift for
-        //  multiple) and closes the dialog with OK.  RibbonCallbacks does
-        //  the actual Word insertion — several picks share one field.
+        //  Preview queue — Add moves selected articles in, Remove takes
+        //  them out, Insert uses the queue (falling back to the current
+        //  selection if nothing was queued).
+        // ─────────────────────────────────────────────────────────────────
+        private void AddSelectedToPreview()
+        {
+            bool added = false;
+            foreach (ListViewItem item in _list.SelectedItems)
+            {
+                if (!(item.Tag is Citation c)) continue;
+                if (_previewItems.Any(p => p.Id == c.Id)) continue;
+                _previewItems.Add(c);
+                added = true;
+            }
+            if (added) RefreshPreview();
+        }
+
+        private void RemoveSelectedFromPreview()
+        {
+            for (int i = _previewList.SelectedIndices.Count - 1; i >= 0; i--)
+                _previewItems.RemoveAt(_previewList.SelectedIndices[i]);
+            RefreshPreview();
+        }
+
+        private void RefreshPreview()
+        {
+            _previewList.BeginUpdate();
+            _previewList.Items.Clear();
+            foreach (var c in _previewItems)
+                _previewList.Items.Add(c.DisplayLabel());
+            _previewList.EndUpdate();
+            _btnInsert.Enabled = _previewItems.Count > 0 || _list.SelectedItems.Count > 0;
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        //  Insert button — collects the preview queue (or, if the user went
+        //  straight for Insert, the current selection) and closes the
+        //  dialog with OK.  RibbonCallbacks does the actual Word insertion
+        //  — several picks share one field.
         // ─────────────────────────────────────────────────────────────────
         private void OnInsert()
         {
-            if (_list.SelectedItems.Count == 0) return;
-            var picked = new List<Citation>();
-            foreach (ListViewItem item in _list.SelectedItems)
-                if (item.Tag is Citation c) picked.Add(c);
-            if (picked.Count == 0) return;
+            if (_previewItems.Count == 0)
+            {
+                AddSelectedToPreview();
+                if (_previewItems.Count == 0) return;
+            }
 
-            SelectedCitations = picked;
-            SelectedCitation = picked[0];
+            SelectedCitations = _previewItems.ToList();
+            SelectedCitation = SelectedCitations[0];
             DialogResult = DialogResult.OK;
             Close();
         }
