@@ -65,14 +65,7 @@ namespace MirareCiteAddIn
         /// entire "(Author, Year)" as one field.</summary>
         private string RenderCitationDisplay(IList<Citation> citations, CitationStyle style,
                                              CitationFormatter formatter)
-        {
-            string core = string.Join(formatter.MultiCitationDelimiter,
-                citations.Select(c => formatter.InTextCore(c)));
-            bool wrap = style == CitationStyle.Apa
-                     || style == CitationStyle.Mla
-                     || style == CitationStyle.Chicago;
-            return wrap ? "(" + core + ")" : core;
-        }
+            => formatter.RenderGroup(citations);
 
         /// <summary>Injected by Connect.OnRibbonLoad — lets us re-activate
         /// the tab after a modal dialog collapses it.</summary>
@@ -150,6 +143,26 @@ namespace MirareCiteAddIn
             return null;
         }
 
+        /// <summary>An existing citation field the collapsed cursor touches —
+        /// directly after its ")" or directly before its "(". Inserting there
+        /// merges with that field instead of creating "(a) (b)" pairs.</summary>
+        private Field FindAdjacentMirareField(Document doc)
+        {
+            try
+            {
+                Range sel = _word.Selection.Range;
+                if (sel.Start != sel.End) return null;   // collapsed cursor only
+                foreach (Field f in doc.Fields)
+                {
+                    if (!CitedTracker.IsMirareCitationCode(f.Code.Text)) continue;
+                    if (sel.Start == f.Result.End + 1 || sel.End == f.Code.Start - 1)
+                        return f;
+                }
+            }
+            catch (Exception ex) { _log.Warn("FindAdjacentMirareField: " + ex.Message); }
+            return null;
+        }
+
         private void OpenPicker(CitationSourceScope scope, Field fieldToEdit)
         {
             try
@@ -187,26 +200,43 @@ namespace MirareCiteAddIn
 
                 using (var form = new CitationPickerForm(scope, Style, RemoteEndpoint,
                             LastLibraryPath, LastProjectPath, citedIds, _log,
-                            preloaded, preselectedIds))
+                            preloaded, preselectedIds, CreateFormatter()))
                 {
                     if (form.ShowDialog() == DialogResult.OK && form.SelectedCitation != null)
                     {
                         var picked = form.SelectedCitations ?? new List<Citation> { form.SelectedCitation };
 
-                        if (fieldToEdit != null)
-                            ReplaceCitationField(doc, fieldToEdit, picked);
+                        // Inserting right next to an existing citation → merge
+                        // into that field so we never grow "(a) (b)" pairs.
+                        Field mergeTarget = fieldToEdit ?? FindAdjacentMirareField(doc);
+                        if (mergeTarget != null)
+                        {
+                            var lookup = BuildRecordLookup();
+                            var combined = new List<Citation>();
+                            var seen = new HashSet<string>();
+                            foreach (var id in CitedTracker.ParseFieldIds(mergeTarget.Code.Text))
+                                if (lookup.TryGetValue(id, out var ec) && seen.Add(id))
+                                    combined.Add(ec);
+                            foreach (var c in picked)
+                                if (seen.Add(c.Id)) combined.Add(c);
+                            ReplaceCitationField(doc, mergeTarget, combined);
+                            foreach (var c in combined) _citationCache[c.Id] = c;
+                        }
                         else
+                        {
                             InsertCitationsAtSelection(doc, picked, Style);
-
-                        // Remember the full records so Update Bibliography can
-                        // render them later (the field only stores the ids).
-                        foreach (var c in picked) _citationCache[c.Id] = c;
+                            foreach (var c in picked) _citationCache[c.Id] = c;
+                        }
 
                         // After insertion, update the tracker so the dynamic
                         // label on the ribbon reflects the new count.
                         foreach (var c in picked) _tracker.AddCited(c.Id);
                     }
                 }
+
+                // Numeric styles: give the new field (and any others) their
+                // current numbers — Update Bibliography finalizes them.
+                RenumberAllCitations(_word.ActiveDocument ?? doc);
                 RestoreRibbonTab();
             }
             catch (Exception ex)
@@ -230,9 +260,10 @@ namespace MirareCiteAddIn
                 if (doc == null) return;
                 _tracker.ScanDocument(doc);
                 _log.Info($"Refresh: cited={_tracker.CitedIds.Count}");
-                // The ribbon label is invalidated by Word automatically when
-                // the user clicks the button (since onAction has fired); to
-                // force a refresh from code we'd need the IRibbonUI pointer.
+                // The ribbon label is only re-queried when its control is
+                // invalidated — clicking Refresh must refresh it too, or it
+                // keeps showing the stale count.
+                try { RibbonUi?.InvalidateControl("mrcCitedCount"); } catch { }
                 MessageBox.Show(
                     $"Refreshed. {_tracker.CitedIds.Count} item(s) currently cited in this document.",
                     "Mirare Cite", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -251,24 +282,18 @@ namespace MirareCiteAddIn
                 Document doc = _word.ActiveDocument;
                 if (doc == null) return;
 
-                // Join the document's cited ids (parsed from the MRCITE
-                // fields) against the session cache of full Citation records.
-                var cited = new List<Citation>();
-                foreach (var id in _tracker.CitedIds)
-                    if (_citationCache.TryGetValue(id, out var c))
-                        cited.Add(c);
-
+                var cited = ResolveCitedRecords(doc);
                 if (cited.Count == 0)
                 {
                     MessageBox.Show(
                         "No cited items to list yet — insert at least one citation first.\n" +
-                        "(The bibliography is built from citations inserted in this Word session.)",
+                        "(Cited articles are matched against the session cache and the\n" +
+                        "library / project files configured in Settings.)",
                         "Mirare Cite", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
 
-                var formatter = CreateFormatter();
-                var bibText = formatter.BuildBibliography(cited).Replace("\r\n", "\r");
+                var bibText = CreateFormatter().BuildBibliography(cited).Replace("\r\n", "\r");
 
                 // Zotero-style: the bibliography lives in ONE DOCVARIABLE
                 // field that is updated in place on every click — Word owns
@@ -277,7 +302,7 @@ namespace MirareCiteAddIn
                 Field bibField = FindBibliographyField(doc);
                 if (bibField != null)
                 {
-                    SetDocVariable(doc, bibField, bibText);
+                    RenameFieldVariable(doc, bibField, bibVar, bibText);
                     _log.Info($"Bibliography field updated with {cited.Count} entries");
                 }
                 else
@@ -294,11 +319,127 @@ namespace MirareCiteAddIn
                     _log.Info($"Bibliography field created with {cited.Count} entries");
                 }
                 _word.ActiveWindow.View.ShowFieldCodes = false;
+
+                // "Update" is a full refresh: re-render every citation field
+                // with the current style (fixes multi-bracket groups and any
+                // stale displays), then renumber numeric citations.
+                RestyleDocument(doc);
             }
             catch (Exception ex)
             {
                 _log.Error("OnEditBibliography failed", ex);
                 MessageBox.Show("Bibliography update failed: " + ex.Message,
+                    "Mirare Cite", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────
+        //  Record lookup — cited ids carry no article data, so resolve them
+        //  against the session cache first, then the library and project
+        //  files from Settings. This makes restyling and bibliography
+        //  generation survive Word restarts.
+        // ─────────────────────────────────────────────────────────────────
+        private Dictionary<string, Citation> BuildRecordLookup()
+        {
+            var lookup = new Dictionary<string, Citation>();
+            foreach (var kv in _citationCache)
+                lookup[kv.Key] = kv.Value;
+
+            try
+            {
+                if (!string.IsNullOrEmpty(LastLibraryPath) && File.Exists(LastLibraryPath))
+                    foreach (var c in new RefManagerLoader(_log).Load(LastLibraryPath))
+                        lookup[c.Id] = c;
+            }
+            catch (Exception ex) { _log.Warn("RecordLookup library: " + ex.Message); }
+
+            try
+            {
+                if (!string.IsNullOrEmpty(LastProjectPath) && File.Exists(LastProjectPath))
+                    foreach (var c in new ProjectLoader(_log).Load(LastProjectPath))
+                        lookup[c.Id] = c;
+            }
+            catch (Exception ex) { _log.Warn("RecordLookup project: " + ex.Message); }
+
+            return lookup;
+        }
+
+        private List<Citation> ResolveCitedRecords(Document doc)
+        {
+            var lookup = BuildRecordLookup();
+            var cited = new List<Citation>();
+            foreach (var id in _tracker.CitedIds)
+                if (lookup.TryGetValue(id, out var c))
+                    cited.Add(c);
+            return cited;
+        }
+
+        /// <summary>
+        /// Re-renders every Mirare citation field and the bibliography field
+        /// in the document with the current style — called when the user
+        /// changes the citation style (or CSL file) in Settings.
+        /// </summary>
+        private void RestyleDocument(Document doc)
+        {
+            try
+            {
+                var lookup = BuildRecordLookup();
+                var formatter = CreateFormatter();
+
+                // Snapshot the fields first — rewrites during iteration
+                // would invalidate the collection.
+                var fields = new List<Field>();
+                foreach (Field f in doc.Fields) fields.Add(f);
+
+                int restyled = 0;
+                foreach (var f in fields)
+                {
+                    string norm = CitedTracker.NormalizeFieldCode(f.Code.Text);
+                    if (!CitedTracker.IsMirareCitationCode(norm)) continue;
+
+                    var ids = CitedTracker.ParseFieldIds(norm);
+                    var citations = new List<Citation>();
+                    bool complete = ids.Count > 0;
+                    foreach (var id in ids)
+                    {
+                        if (lookup.TryGetValue(id, out var c)) citations.Add(c);
+                        else { complete = false; break; }
+                    }
+                    if (!complete)
+                    {
+                        _log.Warn("Restyle skipped field (records missing): " + norm);
+                        continue;
+                    }
+
+                    string display = RenderCitationDisplay(citations, Style, formatter);
+                    string newVarName = BuildMirareFieldCode(citations, Style);
+                    RenameFieldVariable(doc, f, newVarName, display);
+                    restyled++;
+                }
+
+                // Bibliography field follows the new style too.
+                var bib = FindBibliographyField(doc);
+                if (bib != null)
+                {
+                    _tracker.ScanDocument(doc);
+                    var cited = ResolveCitedRecords(doc);
+                    if (cited.Count > 0)
+                    {
+                        var bibText = formatter.BuildBibliography(cited).Replace("\r\n", "\r");
+                        RenameFieldVariable(doc, bib, $"MRCITE BIBLIOGRAPHY style={Style}", bibText);
+                    }
+                }
+
+                _word.ActiveWindow.View.ShowFieldCodes = false;
+
+                // Switching to a numeric style: placeholders → real numbers.
+                RenumberAllCitations(doc);
+                _log.Info($"Restyled {restyled} citation field(s) to {Style}");
+            }
+            catch (Exception ex)
+            {
+                _log.Error("RestyleDocument failed", ex);
+                MessageBox.Show("Restyling citations failed: " + ex.Message,
                     "Mirare Cite", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
@@ -322,12 +463,29 @@ namespace MirareCiteAddIn
         //  (plain text next to it) — the "broken structure". DOCVARIABLE
         //  fields have real results that Word itself maintains via Update().
         // ─────────────────────────────────────────────────────────────────
-        private void SetDocVariable(Document doc, Field field, string value)
+
+        /// <summary>
+        /// Points the field at a (possibly new) variable and value, then
+        /// lets Word re-render the result. If the name changed, the old
+        /// variable is removed once nothing references it anymore.
+        /// </summary>
+        private void RenameFieldVariable(Document doc, Field field, string newVarName, string value)
         {
-            string varName = CitedTracker.NormalizeFieldCode(field.Code.Text);
-            Variable v = FindVariable(doc, varName);
-            if (v != null) v.Value = value;
+            string oldVarName = CitedTracker.NormalizeFieldCode(field.Code.Text);
+            bool nameChanged = !string.Equals(oldVarName, newVarName, StringComparison.Ordinal);
+
+            if (nameChanged)
+                field.Code.Text = $" DOCVARIABLE \"{newVarName}\" ";
+
+            Variable v = FindVariable(doc, newVarName);
+            if (v == null) doc.Variables.Add(newVarName, value);
+            else v.Value = value;
+
             field.Update();
+            ApplyRichFormatting(doc, field);
+
+            if (nameChanged && !VariableStillReferenced(doc, oldVarName))
+                FindVariable(doc, oldVarName)?.Delete();
         }
 
         private Variable FindVariable(Document doc, string name)
@@ -352,10 +510,113 @@ namespace MirareCiteAddIn
                 $"\"{varName}\"", PreserveFormatting: false);
             fld.ShowCodes = false;
             fld.Update();
+            ApplyRichFormatting(doc, fld);
+        }
+
+        /// <summary>
+        /// The CSL renderer emits font-style/font-weight as marker characters
+        /// (italic = \u0001..\u0002, bold = \u0003..\u0004). After the field
+        /// updates, convert each marker pair into real Word character
+        /// formatting on the enclosed text and delete the markers.
+        /// </summary>
+        private void ApplyRichFormatting(Document doc, Field fld)
+        {
+            const char ItalicOn = '\u0001', ItalicOff = '\u0002';
+            const char BoldOn = '\u0003', BoldOff = '\u0004';
+            try
+            {
+                for (int guard = 0; guard < 1000; guard++)
+                {
+                    Range res = fld.Result;
+                    string text = res?.Text;
+                    if (string.IsNullOrEmpty(text)) break;
+
+                    int open = text.IndexOfAny(new[] { ItalicOn, BoldOn });
+                    if (open < 0) break;
+                    bool bold = text[open] == BoldOn;
+                    char closeChar = bold ? BoldOff : ItalicOff;
+                    int close = text.IndexOf(closeChar, open + 1);
+                    if (close < 0) break;   // unpaired marker — leave as-is
+
+                    int basePos = res.Start;
+                    if (close > open + 1)
+                    {
+                        Range inner = doc.Range(basePos + open + 1, basePos + close);
+                        inner.Font.Italic = bold ? 1 : 0;
+                        inner.Font.Bold = bold ? 1 : 0;
+                    }
+                    // Delete close first so the open position stays valid.
+                    doc.Range(basePos + close, basePos + close + 1).Delete();
+                    doc.Range(basePos + open, basePos + open + 1).Delete();
+                }
+            }
+            catch (Exception ex)
+            {
+                _log?.Warn("Rich formatting failed: " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Numeric styles (built-in Numeric, IEEE/Vancouver CSL) cite by
+        /// bibliography position. After the document has been scanned (so
+        /// CitedIds reflects document order) this rewrites every numeric
+        /// citation field's display from its [mirare:id] placeholder to the
+        /// real [n]. Called after insert, edit, Update Bibliography, and
+        /// style changes.
+        /// </summary>
+        private void RenumberAllCitations(Document doc)
+        {
+            try
+            {
+                var formatter = CreateFormatter();
+                if (!formatter.IsNumericStyle) return;
+
+                _tracker.ScanDocument(doc);
+                var lookup = BuildRecordLookup();
+                var numbers = new Dictionary<string, int>();
+                int n = 1;
+                foreach (var id in _tracker.CitedIds)
+                    if (lookup.ContainsKey(id) && !numbers.ContainsKey(id))
+                        numbers[id] = n++;
+
+                if (numbers.Count == 0) return;
+
+                var fields = new List<Field>();
+                foreach (Field f in doc.Fields) fields.Add(f);
+
+                int renumbered = 0;
+                foreach (var f in fields)
+                {
+                    string norm = CitedTracker.NormalizeFieldCode(f.Code.Text);
+                    if (!CitedTracker.IsMirareCitationCode(norm)) continue;
+
+                    var ids = CitedTracker.ParseFieldIds(norm);
+                    if (ids.Count == 0 || ids.Any(id => !numbers.ContainsKey(id))) continue;
+
+                    var citations = new List<Citation>();
+                    var nums = new List<int>();
+                    foreach (var id in ids)
+                    {
+                        citations.Add(lookup.TryGetValue(id, out var cc)
+                            ? cc : new Citation { Id = id });
+                        nums.Add(numbers[id]);
+                    }
+                    string display = formatter.RenderGroup(citations, nums);
+                    RenameFieldVariable(doc, f, norm, display);
+                    renumbered++;
+                }
+                if (renumbered > 0)
+                    _log.Info($"Renumbered {renumbered} numeric citation field(s)");
+            }
+            catch (Exception ex)
+            {
+                _log.Error("RenumberAllCitations failed", ex);
+            }
         }
 
         public void OnSettings(IRibbonControl control)
         {
+            var styleBefore = (Style, CslStylePath);
             using (var f = new SettingsForm(Style, RemoteEndpoint,
                        LastLibraryPath, LastProjectPath, CslStylePath, _log))
             {
@@ -369,6 +630,14 @@ namespace MirareCiteAddIn
                     SaveSettings();
                 }
             }
+
+            // Style (or CSL file) changed → re-render every Mirare field in
+            // the document, Zotero-style: in-text citations and the
+            // bibliography all switch to the new style at once.
+            Document doc = _word.ActiveDocument;
+            if (doc != null && styleBefore != (Style, CslStylePath))
+                RestyleDocument(doc);
+
             RestoreRibbonTab();
         }
 
@@ -379,7 +648,20 @@ namespace MirareCiteAddIn
         public string GetCitedCountLabel(IRibbonControl control)
         {
             int n = _tracker?.CitedIds?.Count ?? 0;
-            return n == 1 ? "1 item cited" : n + " items cited";
+            if (n == 0)
+            {
+                // Nothing cached — rescan (covers Word-start document restore
+                // and manually added/deleted Mirare fields).
+                try
+                {
+                    Document doc = _word.ActiveDocument;
+                    if (doc != null) n = _tracker.ScanDocument(doc).Count;
+                }
+                catch { /* no document — keep 0 */ }
+            }
+            return n == 0 ? "No items cited"
+                 : n == 1 ? "1 item cited"
+                 : n + " items cited";
         }
 
         // ─────────────────────────────────────────────────────────────────
@@ -451,7 +733,7 @@ namespace MirareCiteAddIn
 
             if (wasDocVariable && string.Equals(oldVarName, varName, StringComparison.Ordinal))
             {
-                SetDocVariable(doc, oldField, display);
+                RenameFieldVariable(doc, oldField, varName, display);
             }
             else
             {

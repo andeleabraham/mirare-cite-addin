@@ -77,6 +77,11 @@ namespace MirareCiteAddIn.Services
                 Doi = doi,
                 Url = GetStr(e, "URL") ?? GetStr(e, "url"),
                 Pages = GetStr(e, "page") ?? GetStr(e, "pages"),
+                Volume = GetStr(e, "volume"),
+                Issue = GetStr(e, "issue"),
+                // Default to journal article — most Mirare records are, and
+                // CSL styles condition volume/issue/pages on this type.
+                Type = GetStr(e, "type") ?? "journal-article",
                 Origin = origin
             };
         }

@@ -34,6 +34,8 @@ namespace MirareCiteAddIn.Forms
         private string _lastProjectPath;
         private readonly HashSet<string> _citedIds;
         private readonly Logger _log;
+        private readonly CitationFormatter _fmt;      // renders preview "as in-text"
+        private ToolTip _previewTip;                  // hover → full record details
 
         private List<Citation> _all = new List<Citation>();
         private List<Citation> _filtered = new List<Citation>();
@@ -65,7 +67,8 @@ namespace MirareCiteAddIn.Forms
             string remoteEndpoint, string lastLibraryPath, string lastProjectPath,
             HashSet<string> citedIds, Logger log,
             IEnumerable<Citation> preloadedCitations = null,
-            HashSet<string> preselectedIds = null)
+            HashSet<string> preselectedIds = null,
+            CitationFormatter formatter = null)
         {
             _scope = scope;
             _style = style;
@@ -74,6 +77,7 @@ namespace MirareCiteAddIn.Forms
             _lastProjectPath = lastProjectPath;
             _citedIds = citedIds ?? new HashSet<string>();
             _log = log;
+            _fmt = formatter;
             if (preloadedCitations != null)
                 _previewItems.AddRange(preloadedCitations);
             InitializeComponent();
@@ -194,12 +198,13 @@ namespace MirareCiteAddIn.Forms
             Controls.Add(srcBar);
 
             // ── Preview / add-remove area (Zotero-style editing) ─────────
-            // Sits above the button bar: add articles here, see the queue,
-            // remove what you don't want, then hit Insert.
+            // Sits above the button bar: add articles here, see the queue
+            // displayed AS IT RENDERS IN-TEXT, hover an entry for the full
+            // record, remove what you don't want, then hit Insert.
             var previewPanel = new Panel { Dock = DockStyle.Bottom, Height = 118 };
             var lblPreview = new Label
             {
-                Text = "Citations in this reference:",
+                Text = "Citations in this reference (hover for details):",
                 AutoSize = true,
                 Location = new Point(8, 6)
             };
@@ -209,6 +214,25 @@ namespace MirareCiteAddIn.Forms
                 Size = new Size(600, 84),
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right,
                 Font = new Font("Segoe UI", 9F),
+            };
+            _previewTip = new ToolTip { InitialDelay = 200, ReshowDelay = 80, ShowAlways = true };
+            _previewList.MouseMove += (s, e) =>
+            {
+                int idx = _previewList.IndexFromPoint(e.Location);
+                if (idx >= 0 && idx < _previewItems.Count)
+                {
+                    var c = _previewItems[idx];
+                    string tip = c.Title
+                        + "\n" + string.Join(", ", c.Authors ?? new List<string>())
+                        + "\n" + (c.Journal ?? "") + " (" + (c.Year?.ToString() ?? "n.d.") + ")"
+                        + (string.IsNullOrEmpty(c.Doi) ? "" : "\nDOI: " + c.Doi);
+                    if (_previewTip.GetToolTip(_previewList) != tip)
+                        _previewTip.SetToolTip(_previewList, tip);
+                }
+                else
+                {
+                    _previewTip.SetToolTip(_previewList, null);
+                }
             };
             var btnAdd = new Button
             {
@@ -467,9 +491,28 @@ namespace MirareCiteAddIn.Forms
             _previewList.BeginUpdate();
             _previewList.Items.Clear();
             foreach (var c in _previewItems)
-                _previewList.Items.Add(c.DisplayLabel());
+                _previewList.Items.Add(PreviewText(c));
             _previewList.EndUpdate();
             _btnInsert.Enabled = _previewItems.Count > 0 || _list.SelectedItems.Count > 0;
+        }
+
+        /// <summary>Preview text = how the citation appears in-text
+        /// ("Kaur & Newell, 2024" / "[n]"-styles as "Author, Year"),
+        /// rather than the long record label.</summary>
+        private string PreviewText(Citation c)
+        {
+            if (_fmt != null && !_fmt.IsNumericStyle)
+            {
+                string t = _fmt.InTextCore(c);
+                if (!string.IsNullOrWhiteSpace(t)) return t;
+            }
+            // Numeric/placeholder styles: numbers aren't known yet — show
+            // the author/year form.
+            string name = c.Authors != null && c.Authors.Count > 0
+                ? c.Authors[0] : "Anonymous";
+            int comma = name.IndexOf(',');
+            if (comma >= 0) name = name.Substring(0, comma).Trim();
+            return $"{name}, {c.Year?.ToString() ?? "n.d."}";
         }
 
         // ─────────────────────────────────────────────────────────────────

@@ -111,6 +111,14 @@ namespace MirareCiteAddIn
         public void OnStartupComplete(ref Array custom)
         {
             _log?.Info("OnStartupComplete — add-in fully loaded");
+            // Word may restore a document without firing DocumentOpen —
+            // scan now so the cited count is correct from the start.
+            try
+            {
+                var doc = _wordApp?.ActiveDocument;
+                if (doc != null) _callbacks?.OnActiveDocumentChanged(doc);
+            }
+            catch (Exception ex) { _log?.Warn("startup scan failed: " + ex.Message); }
         }
         public void OnBeginShutdown(ref Array custom) { }
 

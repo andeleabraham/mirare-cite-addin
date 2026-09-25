@@ -7,8 +7,10 @@
 // ============================================================================
 
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Windows.Forms;
 using MirareCiteAddIn.Models;
 using MirareCiteAddIn.Services;
@@ -22,7 +24,7 @@ namespace MirareCiteAddIn.Forms
         private TextBox _remoteBox;
         private TextBox _libraryBox;
         private TextBox _projectBox;
-        private TextBox _cslBox;
+        private ComboBox _cslCombo;
         private Button _btnBrowseLibrary;
         private Button _btnBrowseProject;
         private Button _btnBrowseCsl;
@@ -110,34 +112,59 @@ namespace MirareCiteAddIn.Forms
                 "Mirare Cite project (*.mrrcite)|*.mrrcite");
             t.Controls.Add(_btnBrowseProject, 2, 3);
 
-            // CSL style file (used when Citation style = Csl). The browse
-            // dialog opens in the Mirare app's styles folder when it can be
-            // discovered from %APPDATA%\MirareCite\user_settings.json.
+            // CSL style file (used when Citation style = Csl). The dropdown
+            // lists every .csl found in the Mirare app's styles folder
+            // (discovered from %APPDATA%\MirareCite\user_settings.json);
+            // Browse… still allows loading a custom file from anywhere.
             t.Controls.Add(new Label
             {
-                Text = "CSL style file:",
+                Text = "CSL style:",
                 AutoSize = true,
                 Anchor = AnchorStyles.Left,
                 Enabled = Style == CitationStyle.Csl
             }, 0, 4);
-            _cslBox = new TextBox { Text = CslStylePath, Dock = DockStyle.Top, ReadOnly = true };
-            t.Controls.Add(_cslBox, 1, 4);
-            _btnBrowseCsl = new Button { Text = "Browse…", Dock = DockStyle.Top };
+            _cslCombo = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Dock = DockStyle.Top,
+                Anchor = AnchorStyles.Left | AnchorStyles.Right
+            };
+            PopulateCslStyles();
+            t.Controls.Add(_cslCombo, 1, 4);
+            _btnBrowseCsl = new Button { Text = "Load…", Dock = DockStyle.Top };
             _btnBrowseCsl.Click += (s, e) =>
             {
-                BrowseFile(_cslBox, "CSL style (*.csl)|*.csl");
-                if (!string.IsNullOrEmpty(_cslBox.Text))
-                    _styleCombo.SelectedItem = CitationStyle.Csl;   // picking a file implies CSL
+                using (var ofd = new OpenFileDialog
+                {
+                    Filter = "CSL style (*.csl)|*.csl",
+                    CheckFileExists = true
+                })
+                {
+                    string dir = DiscoverStylesFolder();
+                    if (dir != null && Directory.Exists(dir)) ofd.InitialDirectory = dir;
+                    if (ofd.ShowDialog() == DialogResult.OK)
+                    {
+                        AddCslChoice(ofd.FileName);              // custom file joins the list
+                        _cslCombo.SelectedItem = ofd.FileName;
+                        _styleCombo.SelectedItem = CitationStyle.Csl;
+                    }
+                }
             };
             t.Controls.Add(_btnBrowseCsl, 2, 4);
+            _cslCombo.SelectedIndexChanged += (s, e) =>
+            {
+                if (_cslCombo.SelectedValue is string p && File.Exists(p))
+                    CslStylePath = p;
+            };
+            bool cslEnabled = Style == CitationStyle.Csl;
+            _cslCombo.Enabled = cslEnabled;
+            _btnBrowseCsl.Enabled = cslEnabled;
             _styleCombo.SelectedIndexChanged += (s, e) =>
             {
                 bool csl = (CitationStyle)_styleCombo.SelectedItem == CitationStyle.Csl;
-                _cslBox.Enabled = csl;
+                _cslCombo.Enabled = csl;
                 _btnBrowseCsl.Enabled = csl;
             };
-            _cslBox.Enabled = Style == CitationStyle.Csl;
-            _btnBrowseCsl.Enabled = Style == CitationStyle.Csl;
 
             // Buttons row
             var btnBar = new FlowLayoutPanel
@@ -170,6 +197,53 @@ namespace MirareCiteAddIn.Forms
             }
         }
 
+        /// <summary>Fills the CSL dropdown with every .csl file in the
+        /// Mirare app's styles folder, plus the currently configured file.
+        /// Items are file paths (Value) shown with friendly names (Display).</summary>
+        private void PopulateCslStyles()
+        {
+            var paths = new List<string>();
+            string dir = DiscoverStylesFolder();
+            try
+            {
+                if (dir != null && Directory.Exists(dir))
+                    paths.AddRange(Directory.GetFiles(dir, "*.csl"));
+            }
+            catch { /* unreadable folder — still allow the current file */ }
+
+            if (!string.IsNullOrEmpty(CslStylePath) && File.Exists(CslStylePath)
+                && !paths.Contains(CslStylePath, StringComparer.OrdinalIgnoreCase))
+                paths.Insert(0, CslStylePath);
+
+            BindCslList(paths);
+        }
+
+        private void BindCslList(List<string> paths)
+        {
+            _cslCombo.DataSource = paths
+                .Select(p => new { Key = p, Value = CslDisplayName(p) })
+                .ToList();
+            _cslCombo.DisplayMember = "Value";
+            _cslCombo.ValueMember = "Key";
+            if (CslStylePath != null && paths.Contains(CslStylePath, StringComparer.OrdinalIgnoreCase))
+                _cslCombo.SelectedValue = CslStylePath;
+        }
+
+        private void AddCslChoice(string path)
+        {
+            var paths = new List<string>();
+            foreach (var item in _cslCombo.Items)
+                paths.Add((string)item.GetType().GetProperty("Key").GetValue(item, null));
+            if (!paths.Contains(path, StringComparer.OrdinalIgnoreCase)) paths.Add(path);
+            BindCslList(paths);
+        }
+
+        private static string CslDisplayName(string path)
+        {
+            string name = Path.GetFileNameWithoutExtension(path) ?? path;
+            return name.Replace('-', ' ');
+        }
+
         /// <summary>The Mirare app's styles folder, discovered from the app's
         /// own settings (%APPDATA%\MirareCite\user_settings.json →
         /// working_directory + "\styles"). Null if not discoverable.</summary>
@@ -198,7 +272,7 @@ namespace MirareCiteAddIn.Forms
             RemoteEndpoint = _remoteBox.Text.Trim();
             LibraryPath = _libraryBox.Text.Trim();
             ProjectPath = _projectBox.Text.Trim();
-            CslStylePath = _cslBox.Text.Trim();
+            CslStylePath = _cslCombo.SelectedValue as string ?? "";
             if (Style == CitationStyle.Csl && !File.Exists(CslStylePath))
             {
                 MessageBox.Show("Citation style is set to Csl — pick a .csl style file first.",

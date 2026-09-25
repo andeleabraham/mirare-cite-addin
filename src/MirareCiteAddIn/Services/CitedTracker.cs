@@ -66,10 +66,11 @@ namespace MirareCiteAddIn.Services
                 {
                     foreach (Field fld in cur.Fields)
                     {
-                        // wdFieldAddin = 81.  We use this generic field type
-                        // because it preserves our code+result across saves
-                        // without Word trying to re-evaluate it.
-                        if ((WdFieldType)fld.Type != WdFieldType.wdFieldAddin) continue;
+                        // Our citations live in DOCVARIABLE fields (current,
+                        // wdFieldDocVariable = 38) or legacy ADDIN fields
+                        // (wdFieldAddin = 81).
+                        if (fld.Type != WdFieldType.wdFieldDocVariable &&
+                            fld.Type != WdFieldType.wdFieldAddin) continue;
 
                         string code = fld.Code.Text ?? "";
                         if (!IsMirareCitationCode(code)) continue;

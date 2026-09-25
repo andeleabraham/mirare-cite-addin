@@ -27,6 +27,13 @@ namespace MirareCiteAddIn.Models
         public string Doi { get; set; }
         public string Url { get; set; }
         public string Pages { get; set; }
+        public string Volume { get; set; }
+        public string Issue { get; set; }
+
+        /// <summary>Publication type as written in the source data (Crossref
+        /// style, e.g. "journal-article") — CSL styles condition volume,
+        /// issue and page groups on the mapped CSL type.</summary>
+        public string Type { get; set; }
 
         // miRNA-specific fields (ignored by general formatters but preserved
         // for round-tripping back to .mrrcite projects).

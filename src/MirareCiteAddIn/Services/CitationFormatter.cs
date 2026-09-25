@@ -35,6 +35,15 @@ namespace MirareCiteAddIn.Services
         /// (author-date styles use "; ", CSL styles declare their own).</summary>
         public string MultiCitationDelimiter => _csl?.CitationDelimiter ?? "; ";
 
+        /// <summary>True when the style cites by reference number
+        /// ([1], [2] …) — built-in Numeric, or a numeric CSL style.</summary>
+        public bool IsNumericStyle
+            => _style == CitationStyle.Numeric || (_csl != null && _csl.IsNumeric);
+
+        /// <summary>Delimiter between numbers in a multi-citation numeric
+        /// field ([1], [2] — IEEE-style).</summary>
+        public string NumericInTextDelimiter => _csl?.CitationDelimiter ?? ", ";
+
         // ─────────────────────────────────────────────────────────────────
         //  In-text citation — e.g. "(Smith et al., 2022)".
         // ─────────────────────────────────────────────────────────────────
@@ -76,12 +85,52 @@ namespace MirareCiteAddIn.Services
                 case CitationStyle.Numeric:
                     // Numeric style uses the bibliography index, but at insert
                     // time we don't yet know the index — emit a placeholder
-                    // that OnEditBibliography will renumber.
+                    // that the renumber pass replaces once the bibliography
+                    // has assigned numbers.
                     return $"[mirare:{c.Id}]";
 
                 default:
                     return $"{AuthorInText(c)}, {YearOrNd(c)}";
             }
+        }
+
+        /// <summary>In-text rendering with a known bibliography number —
+        /// used by the renumber pass for numeric styles ([2], [3] …).
+        /// number &lt;= 0 falls back to the numberless rendering.</summary>
+        public string InTextCore(Citation c, int number)
+        {
+            if (number <= 0) return InTextCore(c);
+            if (_csl != null)
+            {
+                if (_csl.IsNumeric)
+                {
+                    string rendered = _csl.RenderInText(c, number);
+                    return string.IsNullOrEmpty(rendered) ? $"[{number}]" : rendered;
+                }
+                return InTextCore(c);
+            }
+            if (_style == CitationStyle.Numeric) return $"[{number}]";
+            return InTextCore(c);
+        }
+
+        /// <summary>
+        /// Full display text for one citation field holding several citations.
+        /// CSL: layout parens wrap the group once ("(A; B; C)"). Built-in
+        /// author-date: parens around a "; "-joined list. Numeric: each [n]
+        /// is self-bracketed, joined with the numeric delimiter.
+        /// </summary>
+        public string RenderGroup(IList<Citation> citations, IList<int> numbers = null)
+        {
+            if (citations == null || citations.Count == 0) return "";
+            if (_csl != null) return _csl.RenderInTextGroup(citations, numbers);
+
+            if (_style == CitationStyle.Numeric)
+            {
+                var parts = citations.Select((c, i) => InTextCore(c, numbers != null && i < numbers.Count ? numbers[i] : 0));
+                return string.Join(NumericInTextDelimiter, parts);
+            }
+            string core = string.Join(MultiCitationDelimiter, citations.Select(c => InTextCore(c)));
+            return "(" + core + ")";
         }
 
         /// <summary>Used when a CSL layout renders nothing usable.</summary>
@@ -100,15 +149,22 @@ namespace MirareCiteAddIn.Services
         {
             var sb = new StringBuilder();
             int n = 1;
+            if (_csl != null)
+            {
+                // CSL: order per the style's <bibliography><sort> keys
+                // (APA alphabetical; IEEE keeps citation order).
+                foreach (var c in _csl.SortBibliography((cited ?? Enumerable.Empty<Citation>()).ToList()))
+                {
+                    sb.AppendLine(_csl.RenderBibliographyEntry(c, n));
+                    n++;
+                }
+                return sb.ToString();
+            }
             foreach (var c in cited ?? Enumerable.Empty<Citation>())
             {
-                string entry;
-                if (_csl != null)
-                    entry = _csl.RenderBibliographyEntry(c, n);
-                else if (_style == CitationStyle.Numeric)
-                    entry = $"[{n}]  {BibEntry(c)}";
-                else
-                    entry = BibEntry(c);
+                string entry = _style == CitationStyle.Numeric
+                    ? $"[{n}]  {BibEntry(c)}"
+                    : BibEntry(c);
                 sb.AppendLine(entry);
                 n++;
             }
