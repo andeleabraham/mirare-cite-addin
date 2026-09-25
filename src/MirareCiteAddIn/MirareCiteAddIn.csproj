@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MirareCiteAddIn.csproj
+  ====================================================================================
+  A COM Word add-in for miRARE Cite (Zotero-style integration).
+  Target: 64-bit Microsoft Word 2016+ (desktop) on Windows.
+  Build : Visual Studio 2022 (Community / Pro / Enterprise) — open the .sln or
+          build from CLI with msbuild.
+
+  The output is MirareCiteAddIn.dll, which you register with:
+      C:\Windows\Microsoft.NET\Framework64\v4.0.30319\RegAsm.exe /codebase MirareCiteAddIn.dll
+
+  See installer\Register-AddIn.ps1 — it does the regasm + registry writes for you.
+  ====================================================================================
+-->
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props"
+          Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">x64</Platform>
+    <ProjectGuid>{8E6D3F2A-1B4C-4E2A-9F1D-7C8E5A6B2D3F}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <RootNamespace>MirareCiteAddIn</RootNamespace>
+    <AssemblyName>MirareCiteAddIn</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <Deterministic>true</Deterministic>
+    <LangVersion>9.0</LangVersion>
+
+    <!-- Word 2016 still runs the .NET Framework 4.x CLR. Do NOT switch to
+         .NET 5/6/7/8 — those cannot be loaded by Office as COM add-ins. -->
+    <TargetFrameworkProfile />
+
+    <!-- COM-visible at the assembly level; we also mark the Connect class
+         with [ComVisible(true)] and a [Guid]/[ProgID]. -->
+    <RegisterForComInterop>false</RegisterForComInterop>
+    <!-- Set true ONLY if you build inside VS and want VS to auto-register
+         the assembly for the current user during build. The Register-AddIn.ps1
+         script does this with the Framework64 regasm, which is what you want
+         for production deploys. -->
+  </PropertyGroup>
+
+  <!-- Compile-time constants so we can keep one source tree for both
+       Word 2016+ (16.0) targeting. -->
+  <PropertyGroup>
+    <DefineConstants>WORD_2016_PLUS;TRACE</DefineConstants>
+  </PropertyGroup>
+
+  <!-- ====== Debug / Release configs (x64 only — matches your 64-bit Word) ====== -->
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|x64' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\x64\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE;WORD_2016_PLUS</DefineConstants>
+    <PlatformTarget>x64</PlatformTarget>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|x64' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\x64\Release\</OutputPath>
+    <DefineConstants>TRACE;WORD_2016_PLUS</DefineConstants>
+    <PlatformTarget>x64</PlatformTarget>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+
+  <!-- ====== References ====== -->
+  <ItemGroup>
+    <!-- Core framework -->
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Xml" />
+    <Reference Include="Microsoft.CSharp" />
+
+    <!--
+      Office PIAs — the real 15.0 (Office 2016+) interop assemblies ship
+      with Visual Studio 2022's "Visual Studio Tools for Office (VSTO)"
+      component. Reference them directly; note the NuGet "office" package
+      only ever published the 2007 PIA (12.0.0), which conflicts with
+      these (MSB3277), so the local PIAs are the better source.
+      Private=True copies them next to the add-in DLL — required because
+      this machine's GAC has no PIAs (Word loads everything from the
+      add-in's own folder).
+    -->
+    <Reference Include="Office">
+      <HintPath>C:\Program Files (x86)\Microsoft Visual Studio\Shared\Visual Studio Tools for Office\PIA\Office15\Office.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Include="Microsoft.Office.Interop.Word">
+      <HintPath>C:\Program Files (x86)\Microsoft Visual Studio\Shared\Visual Studio Tools for Office\PIA\Office15\Microsoft.Office.Interop.Word.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+
+    <!-- JSON for settings + the .mrrcite/.refmanager loaders -->
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+
+    <!--
+      The Extensibility (IDTExtensibility2) interface ships with Visual
+      Studio. There is no canonical NuGet package, so reference the VS copy
+      directly (simple name — the on-disk version is 7.0.3300.0, not
+      7.0.0.0, and pinning the full name makes MSBuild reject the
+      HintPath). Private=True so it ships next to the add-in DLL.
+    -->
+    <Reference Include="Extensibility">
+      <HintPath>C:\Program Files (x86)\Common Files\Microsoft Shared\MSEnv\PublicAssemblies\Extensibility.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- ====== Source ====== -->
+  <ItemGroup>
+    <Compile Include="AssemblyInfo.cs" />
+    <Compile Include="Connect.cs" />
+    <Compile Include="RibbonCallbacks.cs" />
+    <Compile Include="Models\Citation.cs" />
+    <Compile Include="Models\CitationStyle.cs" />
+    <Compile Include="Models\MirareProject.cs" />
+    <Compile Include="Models\RefManagerLibrary.cs" />
+    <Compile Include="Models\CitedItem.cs" />
+    <Compile Include="Services\ProjectLoader.cs" />
+    <Compile Include="Services\RefManagerLoader.cs" />
+    <Compile Include="Services\RemoteCitationService.cs" />
+    <Compile Include="Services\CitationFormatter.cs" />
+    <Compile Include="Services\CitedTracker.cs" />
+    <Compile Include="Services\Logger.cs" />
+    <Compile Include="Forms\CitationPickerForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="Forms\CitationPickerForm.Designer.cs">
+      <DependentUpon>CitationPickerForm.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Forms\SettingsForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\ribbon.xml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" />
+  </ItemGroup>
+
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>

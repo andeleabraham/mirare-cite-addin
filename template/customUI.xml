@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  template/customUI.xml
+  ============================================================================
+  Ribbon XML used by the .dotm-only variant of the Mirare Cite add-in.
+  Place this file INSIDE the .dotm ZIP package at:
+      customUI\customUI.xml
+  and register a relationship from _rels/.rels to it.
+
+  The Build-MirareCiteRibbon.ps1 script in this folder does that for you
+  on Windows using the Word COM API.
+
+  Every callback below MUST be a Public Sub in the VBA project's standard
+  module "MirareCiteRibbon" — see MirareCiteRibbon.vba.bas.
+-->
+<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui"
+          onLoad="OnRibbonLoad">
+  <ribbon>
+    <tabs>
+      <tab id="mrcTab" label="Mirare Cite" keytip="MR">
+
+        <group id="mrcGroupInsert" label="Insert">
+          <button id="mrcInsertCitation"
+                  label="Insert Citation"
+                  size="large"
+                  onAction="OnInsertCitation"
+                  keytip="IC"
+                  screentip="Open the Mirare Cite picker" />
+          <button id="mrcInsertFromLibrary"
+                  label="From Library"
+                  size="normal"
+                  onAction="OnInsertFromLibrary"
+                  keytip="IL" />
+          <button id="mrcInsertFromProject"
+                  label="From Project"
+                  size="normal"
+                  onAction="OnInsertFromProject"
+                  keytip="IP" />
+          <button id="mrcInsertFromRemote"
+                  label="From Remote"
+                  size="normal"
+                  onAction="OnInsertFromRemote"
+                  keytip="IR" />
+        </group>
+
+        <group id="mrcGroupStatus" label="Status">
+          <button id="mrcRefreshCitedIndicator"
+                  label="Refresh Cited Indicator"
+                  size="normal"
+                  onAction="OnRefreshCitedIndicator"
+                  keytip="RC" />
+          <labelControl id="mrcCitedCount" getLabel="GetCitedCountLabel" />
+        </group>
+
+        <group id="mrcGroupBibliography" label="Bibliography">
+          <button id="mrcEditBibliography"
+                  label="Update Bibliography"
+                  size="normal"
+                  onAction="OnEditBibliography"
+                  keytip="UB" />
+        </group>
+
+        <group id="mrcGroupSettings" label="Settings">
+          <button id="mrcSettings"
+                  label="Settings"
+                  size="normal"
+                  onAction="OnSettings"
+                  keytip="ST" />
+        </group>
+      </tab>
+    </tabs>
+  </ribbon>
+</customUI>

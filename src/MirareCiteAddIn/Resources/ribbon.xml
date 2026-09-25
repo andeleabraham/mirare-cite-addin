@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ribbon.xml — customUI for the Mirare Cite Word add-in.
+  ============================================================================
+  Notes:
+    - xmlns must be the 2009/07 customUI schema (Word 2010+).
+    - Every onAction / getLabel / getImage callback listed here MUST exist as a
+      public method on the Connect class — see Connect.cs.
+    - Office's ribbon engine is *case-sensitive* on callback names.
+    - If even one callback signature is wrong, Office silently drops the
+      whole tab.  To get diagnostics during development, set:
+        HKCU\Software\Microsoft\Office\16.0\Common\Debug\EnableRibbonExtensibilityLogging = 1
+      and check %TEMP%\RibbonXmlLog.txt.
+-->
+<customUI xmlns="http://schemas.microsoft.com/office/2009/07/customui"
+          onLoad="OnRibbonLoad">
+
+  <ribbon>
+    <tabs>
+      <!-- idQ = qualified id so multiple add-ins could share this tab;
+           plain id is fine for a single add-in. -->
+      <tab id="mrcTab"
+           label="Mirare Cite"
+           keytip="MR">
+
+        <group id="mrcGroupInsert"
+               label="Insert">
+
+          <!-- Primary "Insert Citation" — opens the picker dialog with all
+               sources (library + project + remote) in a single list. -->
+          <button id="mrcInsertCitation"
+                  label="Insert Citation"
+                  size="large"
+                  onAction="OnInsertCitation"
+                  keytip="IC"
+                  screentip="Insert a Mirare citation at the cursor"
+                  supertip="Opens the Mirare Cite picker. Items already cited in this document are marked with a check." />
+
+          <!-- Three scoped shortcuts that pre-filter the picker. -->
+          <button id="mrcInsertFromLibrary"
+                  label="From Library"
+                  size="normal"
+                  onAction="OnInsertFromLibrary"
+                  keytip="IL"
+                  screentip="Insert from the primary RefManager library (.refmanager.json)" />
+
+          <button id="mrcInsertFromProject"
+                  label="From Project"
+                  size="normal"
+                  onAction="OnInsertFromProject"
+                  keytip="IP"
+                  screentip="Insert from a Mirare Cite project file (.mrrcite)" />
+
+          <button id="mrcInsertFromRemote"
+                  label="From Remote"
+                  size="normal"
+                  onAction="OnInsertFromRemote"
+                  keytip="IR"
+                  screentip="Insert from the remote Mirare API (HTTPS)" />
+        </group>
+
+        <group id="mrcGroupStatus" label="Status">
+          <button id="mrcRefreshCitedIndicator"
+                  label="Refresh Cited Indicator"
+                  size="normal"
+                  onAction="OnRefreshCitedIndicator"
+                  keytip="RC"
+                  screentip="Re-scan the active document and update the cited indicator on the picker list" />
+
+          <!-- A dynamic label that shows how many items are cited right now. -->
+          <labelControl id="mrcCitedCount"
+                        getLabel="GetCitedCountLabel" />
+        </group>
+
+        <group id="mrcGroupBibliography" label="Bibliography">
+          <button id="mrcEditBibliography"
+                  label="Update Bibliography"
+                  size="normal"
+                  onAction="OnEditBibliography"
+                  keytip="UB"
+                  screentip="Refresh the bibliography section at the end of the document from all cited items" />
+        </group>
+
+        <group id="mrcGroupSettings" label="Settings">
+          <button id="mrcSettings"
+                  label="Settings"
+                  size="normal"
+                  onAction="OnSettings"
+                  keytip="ST"
+                  screentip="Default citation style, default source, remote endpoint URL" />
+        </group>
+      </tab>
+    </tabs>
+  </ribbon>
+</customUI>

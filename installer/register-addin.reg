@@ -1,0 +1,42 @@
+Windows Registry Editor Version 5.00
+
+; ============================================================================
+;  register-addin.reg
+;  ============================================================================
+;  Registers the Mirare Cite Word COM add-in for the CURRENT USER only
+;  (no admin rights needed).  Run by double-clicking, or via the
+;  Register-AddIn.ps1 script which also runs regasm.
+;
+;  This file sets ONLY the registry keys Office needs; it does NOT call
+;  regasm to register the .NET COM class.  Run Register-AddIn.ps1 instead
+;  for the complete installation — that script calls regasm + writes these
+;  same keys + clears Word's disabled-items list.
+;
+;  PRODID: MirareCite.AddIn  (must match Connect.cs → [ProgId(...)])
+;  TARGET: Word 16.0 (2016/2019/Microsoft 365)
+;  WORD BITNESS: 64-bit (matches your stated target)
+;
+;  NOTE: this file assumes the user's Office version is 16.0 (which covers
+;  Word 2016, 2019, and Microsoft 365).  If you target an older Word, change
+;  every "16.0" below to "15.0" (Word 2013) or "14.0" (Word 2010).
+; ============================================================================
+
+; ---- The add-in registration key itself -------------------------------------
+[HKEY_CURRENT_USER\Software\Microsoft\Office\Word\Addins\MirareCite.AddIn]
+"FriendlyName"="Mirare Cite"
+"Description"="Word COM add-in for Mirare Cite — insert citations from .mrrcite projects, .refmanager.json libraries, or the remote Mirare API."
+"LoadBehavior"=dword:00000003
+"CommandLineSafe"=dword:00000000
+
+; ---- Clear Word's "disabled items" list so it doesn't stay blocked ---------
+; (Word may have hard-disabled the add-in after a previous crash.)
+[-HKEY_CURRENT_USER\Software\Microsoft\Office\16.0\Word\Resiliency\DisabledItems]
+
+; ---- Enable Office's own add-in + ribbon diagnostics -----------------------
+[HKEY_CURRENT_USER\Software\Microsoft\Office\16.0\Common\Debug]
+"EnableRibbonExtensibilityLogging"=dword:00000001
+"EnableAddInLogging"=dword:00000001
+
+; ---- Lower macro security just enough that the optional .dotm variant loads
+[HKEY_CURRENT_USER\Software\Microsoft\Office\16.0\Word\Security]
+"VBAWarnings"=dword:00000002  ; 2 = Notifications for all macros (allow user to accept)
