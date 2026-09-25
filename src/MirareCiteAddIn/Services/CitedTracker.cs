@@ -72,15 +72,19 @@ namespace MirareCiteAddIn.Services
                         if ((WdFieldType)fld.Type != WdFieldType.wdFieldAddin) continue;
 
                         string code = fld.Code.Text ?? "";
-                        if (!IsMirareFieldCode(code)) continue;
+                        if (!IsMirareCitationCode(code)) continue;
 
-                        var parsed = ParseFieldCode(code);
-                        if (parsed == null) continue;
-
-                        if (!_citedIds.Contains(parsed.Id))
+                        // One field may carry several citations
+                        // ("MRCITE id=a id=b style=Apa" — multi-pick inserts).
+                        var ids = ParseFieldIds(code);
+                        var style = ParseFieldStyle(code);
+                        foreach (var id in ids)
                         {
-                            _citedIds.Add(parsed.Id);
-                            _styles[parsed.Id] = parsed.Style;
+                            if (!_citedIds.Contains(id))
+                            {
+                                _citedIds.Add(id);
+                                _styles[id] = style;
+                            }
                         }
                     }
                 }
@@ -91,41 +95,55 @@ namespace MirareCiteAddIn.Services
 
         /// <summary>
         /// Field.Code returns the instruction WITH its type keyword —
-        /// " ADDIN MRCITE id=abc123 style=apa " (leading/trailing space and
-        /// the ADDIN keyword included) — so normalize before matching.
+        /// " ADDIN MRCITE id=abc123 style=apa " — so normalize before
+        /// matching. Public because the ribbon callbacks use the same
+        /// normalization to find citable fields.
         /// </summary>
-        private static bool IsMirareFieldCode(string code)
+        public static string NormalizeFieldCode(string code)
         {
-            if (string.IsNullOrEmpty(code)) return false;
+            if (string.IsNullOrEmpty(code)) return "";
             code = code.Trim();
             if (code.StartsWith("ADDIN ", StringComparison.OrdinalIgnoreCase))
                 code = code.Substring(6).TrimStart();
-            return code.StartsWith("MRCITE ", StringComparison.Ordinal);
+            return code;
         }
 
-        /// <summary>
-        /// Parse a field code like "MRCITE id=abc123 style=apa" into (id, style).
-        /// </summary>
-        private static CitedItem ParseFieldCode(string code)
+        /// <summary>True if the field is an MRCITE citation (not the
+        /// bibliography field — that has no id= tokens).</summary>
+        public static bool IsMirareCitationCode(string code)
         {
-            code = code.Trim();
-            if (code.StartsWith("ADDIN ", StringComparison.OrdinalIgnoreCase))
-                code = code.Substring(6).TrimStart();
-            // Tokenize by whitespace.
-            var tokens = code.Split(new[] { ' ', '\t', '\r', '\n' },
-                StringSplitOptions.RemoveEmptyEntries);
-            string id = null;
-            string styleStr = null;
-            foreach (var t in tokens)
+            code = NormalizeFieldCode(code);
+            if (!code.StartsWith("MRCITE ", StringComparison.Ordinal)) return false;
+            if (code.IndexOf("BIBLIOGRAPHY", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            return code.Contains("id=");
+        }
+
+        /// <summary>All id= tokens — a multi-citation field carries several.</summary>
+        public static List<string> ParseFieldIds(string code)
+        {
+            var ids = new List<string>();
+            foreach (var t in NormalizeFieldCode(code).Split(
+                         new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
             {
-                if (t.StartsWith("id=", StringComparison.Ordinal)) id = t.Substring(3);
-                else if (t.StartsWith("style=", StringComparison.Ordinal)) styleStr = t.Substring(6);
+                if (t.StartsWith("id=", StringComparison.Ordinal) && t.Length > 3)
+                    ids.Add(t.Substring(3));
             }
-            if (string.IsNullOrEmpty(id)) return null;
-            CitationStyle st = CitationStyle.Apa;
-            if (!string.IsNullOrEmpty(styleStr))
-                Enum.TryParse(styleStr, true, out st);
-            return new CitedItem { Id = id, Style = st };
+            return ids;
+        }
+
+        public static CitationStyle ParseFieldStyle(string code)
+        {
+            foreach (var t in NormalizeFieldCode(code).Split(
+                         new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (t.StartsWith("style=", StringComparison.Ordinal))
+                {
+                    if (Enum.TryParse(t.Substring(6), true, out CitationStyle st))
+                        return st;
+                    break;
+                }
+            }
+            return CitationStyle.Apa;
         }
 
         /// <summary>

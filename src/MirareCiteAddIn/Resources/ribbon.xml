@@ -25,14 +25,17 @@
 
           <!-- Primary "Insert Citation" — opens the picker dialog with all
                sources (library + project + remote) in a single list. -->
+          <!-- label comes from GetInsertButtonLabel ("Insert Citation" /
+               "Edit Citation") — customUI forbids a static label attribute
+               alongside getLabel, so label lives only in the callback. -->
           <button id="mrcInsertCitation"
-                  label="Insert Citation"
+                  getLabel="GetInsertButtonLabel"
                   size="large"
                   imageMso="FieldInsert"
                   onAction="OnInsertCitation"
                   keytip="IC"
                   screentip="Insert a Mirare citation at the cursor"
-                  supertip="Opens the Mirare Cite picker. Items already cited in this document are marked with a check." />
+                  supertip="Opens the Mirare Cite picker. Ctrl/Shift-click to pick several; items already cited in this document are marked with a check. Click with the cursor inside an existing citation to edit it." />
 
           <!-- Three scoped shortcuts that pre-filter the picker. -->
           <button id="mrcInsertFromLibrary"

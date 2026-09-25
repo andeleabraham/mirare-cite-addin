@@ -74,6 +74,9 @@ namespace MirareCiteAddIn
                 // whenever the user switches documents.
                 _wordApp.DocumentChange += OnDocumentChange;
                 ((Word.ApplicationEvents4_Event)_wordApp).DocumentOpen += OnDocumentOpen;
+                // Refresh the "Insert/Edit Citation" button label as the
+                // cursor moves in and out of MRCITE fields.
+                ((Word.ApplicationEvents4_Event)_wordApp).WindowSelectionChange += OnSelectionChange;
             }
             catch (Exception ex)
             {
@@ -91,6 +94,7 @@ namespace MirareCiteAddIn
                 if (_wordApp != null)
                 {
                     _wordApp.DocumentChange -= OnDocumentChange;
+                    ((Word.ApplicationEvents4_Event)_wordApp).WindowSelectionChange -= OnSelectionChange;
                     // Word.ApplicationEvents4_Event.DocumentOpen -= ...
                 }
                 _wordApp = null;
@@ -173,8 +177,14 @@ namespace MirareCiteAddIn
         public void OnSettings(IRibbonControl control)
             => _callbacks?.OnSettings(control);
 
-        public string GetCitedCountLabel(IRibbonControl control)
-            => _callbacks?.GetCitedCountLabel(control) ?? "0 cited";
+    public string GetCitedCountLabel(IRibbonControl control)
+        => _callbacks?.GetCitedCountLabel(control) ?? "0 cited";
+
+    /// <summary>Insert button doubles as "Edit Citation" when the cursor is
+    /// inside an MRCITE field. The label is refreshed by SelectionChange
+    /// invalidations.</summary>
+    public string GetInsertButtonLabel(IRibbonControl control)
+        => _callbacks?.GetInsertButtonLabel() ?? "Insert Citation";
 
         // ─────────────────────────────────────────────────────────────────
         //  Ribbon lifecycle + image callbacks — these MUST exist on the
@@ -233,6 +243,14 @@ namespace MirareCiteAddIn
             {
                 _log?.Error("OnDocumentOpen failed", ex);
             }
+        }
+
+        // Fires on every cursor move — flip the Insert button label cheaply
+        // by invalidating just that control (getLabel is then re-queried).
+        private void OnSelectionChange(Word.Selection sel)
+        {
+            try { _ribbonUi?.InvalidateControl("mrcInsertCitation"); }
+            catch { /* ribbon not built yet (or already gone) — ignore */ }
         }
     }
 

@@ -25,17 +25,27 @@ namespace MirareCiteAddIn.Services
         //  In-text citation — e.g. "(Smith et al., 2022)".
         // ─────────────────────────────────────────────────────────────────
         public string InText(Citation c)
+            => _style == CitationStyle.Numeric
+                ? InTextCore(c)              // "[mirare:…]" carries its own brackets
+                : $"({InTextCore(c)})";
+
+        /// <summary>
+        /// The citation text WITHOUT surrounding parentheses — the parens are
+        /// inserted as plain document text around the field, so users can
+        /// style/edit them independently (Zotero-style).
+        /// </summary>
+        public string InTextCore(Citation c)
         {
             switch (_style)
             {
                 case CitationStyle.Apa:
-                    return $"({AuthorInText(c)}, {YearOrNd(c)})";
+                    return $"{AuthorInText(c)}, {YearOrNd(c)}";
 
                 case CitationStyle.Mla:
-                    return $"({FirstAuthorSurname(c)} {PagePlaceholder(c)})";
+                    return $"{FirstAuthorSurname(c)} {PagePlaceholder(c)}";
 
                 case CitationStyle.Chicago:
-                    return $"({FirstAuthorSurname(c)} {YearOrNd(c)})";
+                    return $"{FirstAuthorSurname(c)} {YearOrNd(c)}";
 
                 case CitationStyle.Numeric:
                     // Numeric style uses the bibliography index, but at insert
@@ -44,7 +54,7 @@ namespace MirareCiteAddIn.Services
                     return $"[mirare:{c.Id}]";
 
                 default:
-                    return $"({AuthorInText(c)}, {YearOrNd(c)})";
+                    return $"{AuthorInText(c)}, {YearOrNd(c)}";
             }
         }
 

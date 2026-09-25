@@ -51,6 +51,10 @@ namespace MirareCiteAddIn.Forms
 
         public Citation SelectedCitation { get; private set; }
 
+        /// <summary>All picked citations (Ctrl/Shift multi-select) — inserted
+        /// into ONE citation field, Zotero-style. Single pick = list of 1.</summary>
+        public List<Citation> SelectedCitations { get; private set; }
+
         public CitationPickerForm(CitationSourceScope scope, CitationStyle style,
             string remoteEndpoint, string lastLibraryPath, string lastProjectPath,
             HashSet<string> citedIds, Logger log)
@@ -150,7 +154,7 @@ namespace MirareCiteAddIn.Forms
                 View = View.Details,
                 FullRowSelect = true,
                 HideSelection = false,
-                MultiSelect = false,
+                MultiSelect = true,     // pick several → one combined citation field
                 Font = new Font("Segoe UI", 9F),
             };
             _list.Columns.Add("Cited", 60);
@@ -371,14 +375,20 @@ namespace MirareCiteAddIn.Forms
              : o == CitationOrigin.Project ? "project" : "library";
 
         // ─────────────────────────────────────────────────────────────────
-        //  Insert button — sets SelectedCitation and closes the dialog with
-        //  OK.  RibbonCallbacks.OpenPicker does the actual Word insertion.
+        //  Insert button — collects ALL selected citations (Ctrl/Shift for
+        //  multiple) and closes the dialog with OK.  RibbonCallbacks does
+        //  the actual Word insertion — several picks share one field.
         // ─────────────────────────────────────────────────────────────────
         private void OnInsert()
         {
             if (_list.SelectedItems.Count == 0) return;
-            var c = (Citation)_list.SelectedItems[0].Tag;
-            SelectedCitation = c;
+            var picked = new List<Citation>();
+            foreach (ListViewItem item in _list.SelectedItems)
+                if (item.Tag is Citation c) picked.Add(c);
+            if (picked.Count == 0) return;
+
+            SelectedCitations = picked;
+            SelectedCitation = picked[0];
             DialogResult = DialogResult.OK;
             Close();
         }
