@@ -234,9 +234,15 @@ namespace MirareCiteAddIn
                     }
                 }
 
-                // Numeric styles: give the new field (and any others) their
-                // current numbers — Update Bibliography finalizes them.
-                RenumberAllCitations(_word.ActiveDocument ?? doc);
+                // Seamless UX — after any insert/edit, with no extra clicks:
+                //   * numeric citations get current numbers,
+                //   * an existing References field is rebuilt in place,
+                //   * the cited-count label is refreshed.
+                Document live = _word.ActiveDocument ?? doc;
+                RenumberAllCitations(live);
+                try { RefreshBibliographyField(live); }
+                catch (Exception ex2) { _log.Warn("Auto bibliography refresh failed: " + ex2.Message); }
+                try { RibbonUi?.InvalidateControl("mrcCitedCount"); } catch { }
                 RestoreRibbonTab();
             }
             catch (Exception ex)
@@ -282,6 +288,7 @@ namespace MirareCiteAddIn
                 Document doc = _word.ActiveDocument;
                 if (doc == null) return;
 
+                _tracker.ScanDocument(doc);
                 var cited = ResolveCitedRecords(doc);
                 if (cited.Count == 0)
                 {
@@ -299,13 +306,7 @@ namespace MirareCiteAddIn
                 // field that is updated in place on every click — Word owns
                 // the result section, so updates never corrupt the field.
                 string bibVar = $"MRCITE BIBLIOGRAPHY style={Style}";
-                Field bibField = FindBibliographyField(doc);
-                if (bibField != null)
-                {
-                    RenameFieldVariable(doc, bibField, bibVar, bibText);
-                    _log.Info($"Bibliography field updated with {cited.Count} entries");
-                }
-                else
+                if (!RefreshBibliographyField(doc))
                 {
                     // First run: heading paragraph + bibliography field at end.
                     Range tail = doc.Content;
@@ -411,6 +412,7 @@ namespace MirareCiteAddIn
                         continue;
                     }
 
+                    formatter.SortGroup(citations);       // CSL citation sort (e.g. APA: author/date)
                     string display = RenderCitationDisplay(citations, Style, formatter);
                     string newVarName = BuildMirareFieldCode(citations, Style);
                     RenameFieldVariable(doc, f, newVarName, display);
@@ -453,6 +455,24 @@ namespace MirareCiteAddIn
                     return f;
             }
             return null;
+        }
+
+        /// <summary>Rebuilds the existing References field in place. Returns
+        /// false when the document has none (never creates one uninvited).
+        /// Called automatically after every insert/edit, and by Update
+        /// Bibliography, so the list stays current without manual clicks.</summary>
+        private bool RefreshBibliographyField(Document doc)
+        {
+            Field bib = FindBibliographyField(doc);
+            if (bib == null) return false;
+
+            _tracker.ScanDocument(doc);
+            var cited = ResolveCitedRecords(doc);
+            if (cited.Count == 0) return true;
+            var bibText = CreateFormatter().BuildBibliography(cited).Replace("\r\n", "\r");
+            RenameFieldVariable(doc, bib, $"MRCITE BIBLIOGRAPHY style={Style}", bibText);
+            _log.Info($"Bibliography field refreshed ({cited.Count} entries)");
+            return true;
         }
 
         // ─────────────────────────────────────────────────────────────────
@@ -601,6 +621,7 @@ namespace MirareCiteAddIn
                             ? cc : new Citation { Id = id });
                         nums.Add(numbers[id]);
                     }
+                    formatter.SortGroup(citations, nums);   // CSL citation sort (numeric: ascending [n])
                     string display = formatter.RenderGroup(citations, nums);
                     RenameFieldVariable(doc, f, norm, display);
                     renumbered++;
@@ -700,6 +721,7 @@ namespace MirareCiteAddIn
         {
             Range sel = _word.Selection.Range;
             var formatter = CreateFormatter();
+            formatter.SortGroup(citations);          // CSL citation sort (e.g. APA: author/date)
             string display = RenderCitationDisplay(citations, style, formatter);
             string varName = BuildMirareFieldCode(citations, style);
 
@@ -728,6 +750,7 @@ namespace MirareCiteAddIn
             bool wasDocVariable = oldField.Type == WdFieldType.wdFieldDocVariable;
 
             var formatter = CreateFormatter();
+            formatter.SortGroup(citations);          // CSL citation sort (e.g. APA: author/date)
             string display = RenderCitationDisplay(citations, Style, formatter);
             string varName = BuildMirareFieldCode(citations, Style);
 

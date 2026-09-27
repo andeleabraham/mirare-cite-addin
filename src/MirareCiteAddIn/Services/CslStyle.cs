@@ -232,6 +232,69 @@ namespace MirareCiteAddIn.Services
             return keyed.Select(k => k.Key).ToList();
         }
 
+        /// <summary>
+        /// Sorts the citations inside ONE in-text group by the style's
+        /// &lt;citation&gt;&lt;sort&gt; keys (APA: author then date; numeric
+        /// styles: citation-number). Reorders both lists in place; numbers
+        /// may be null when reference numbers aren't known yet (a
+        /// citation-number key then falls back to the given order).
+        /// </summary>
+        public void SortGroup(IList<Citation> citations, IList<int> numbers)
+        {
+            var sortNode = _root.SelectSingleNode("c:citation/c:sort", _ns) as XmlElement;
+            if (sortNode == null || citations == null || citations.Count < 2) return;
+
+            var keyEls = new List<XmlElement>();
+            foreach (XmlNode node in sortNode.ChildNodes)
+                if (node.NodeType == XmlNodeType.Element && ((XmlElement)node).LocalName == "key")
+                    keyEls.Add((XmlElement)node);
+            if (keyEls.Count == 0) return;
+
+            var citationEl = _root.SelectSingleNode("c:citation", _ns) as XmlElement;
+            _ctxEtAlMin = GetInt(citationEl, "et-al-min", int.MaxValue);
+            _ctxEtAlUseFirst = GetInt(citationEl, "et-al-use-first", 1);
+
+            string KeyValue(XmlElement k, Citation c, int fallback)
+            {
+                string macro = Attr(k, "macro");
+                if (!string.IsNullOrEmpty(macro))
+                    return StripMarkers(RenderMacro(macro, c, 0, 0, Plain) ?? "");
+                string var = Attr(k, "variable");
+                if (var == "citation-number")
+                    return fallback.ToString(CultureInfo.InvariantCulture);
+                return StripMarkers(VariableValue(var, c, 0) ?? "");
+            }
+
+            var idx = Enumerable.Range(0, citations.Count).ToList();
+            idx.Sort((a, b) =>
+            {
+                foreach (var k in keyEls)
+                {
+                    string va = KeyValue(k, citations[a],
+                        numbers != null && a < numbers.Count ? numbers[a] : a + 1);
+                    string vb = KeyValue(k, citations[b],
+                        numbers != null && b < numbers.Count ? numbers[b] : b + 1);
+                    if (string.Equals(va, vb, StringComparison.OrdinalIgnoreCase)) continue;
+                    int cmp;
+                    if (double.TryParse(va, NumberStyles.Any, CultureInfo.InvariantCulture, out double na) &&
+                        double.TryParse(vb, NumberStyles.Any, CultureInfo.InvariantCulture, out double nb))
+                        cmp = na.CompareTo(nb);
+                    else
+                        cmp = string.Compare(va, vb, StringComparison.OrdinalIgnoreCase);
+                    return Attr(k, "sort") == "descending" ? -cmp : cmp;
+                }
+                return a.CompareTo(b);     // stable for equal keys
+            });
+
+            var sortedC = idx.Select(i => citations[i]).ToList();
+            for (int i = 0; i < sortedC.Count; i++) citations[i] = sortedC[i];
+            if (numbers != null && numbers.Count == citations.Count)
+            {
+                var sortedN = idx.Select(i => numbers[i]).ToList();
+                for (int i = 0; i < sortedN.Count; i++) numbers[i] = sortedN[i];
+            }
+        }
+
         // ── renderer core ─────────────────────────────────────────────────
 
         private string RenderChildren(XmlElement parent, Citation c, int number,

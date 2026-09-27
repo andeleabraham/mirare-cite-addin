@@ -113,6 +113,12 @@ namespace MirareCiteAddIn.Services
             return InTextCore(c);
         }
 
+        /// <summary>Sorts citations within one in-text group per the loaded
+        /// CSL's &lt;citation&gt;&lt;sort&gt; rules (built-in styles declare
+        /// none, so their order is kept).</summary>
+        public void SortGroup(IList<Citation> citations, IList<int> numbers = null)
+            => _csl?.SortGroup(citations, numbers);
+
         /// <summary>
         /// Full display text for one citation field holding several citations.
         /// CSL: layout parens wrap the group once ("(A; B; C)"). Built-in
@@ -122,7 +128,15 @@ namespace MirareCiteAddIn.Services
         public string RenderGroup(IList<Citation> citations, IList<int> numbers = null)
         {
             if (citations == null || citations.Count == 0) return "";
-            if (_csl != null) return _csl.RenderInTextGroup(citations, numbers);
+            if (_csl != null)
+            {
+                // Numeric CSL style without known numbers (bibliography not
+                // built yet) — render placeholders, not empty brackets.
+                if (numbers == null && _csl.IsNumeric)
+                    return string.Join(NumericInTextDelimiter,
+                        citations.Select(c => InTextCore(c)));
+                return _csl.RenderInTextGroup(citations, numbers);
+            }
 
             if (_style == CitationStyle.Numeric)
             {
